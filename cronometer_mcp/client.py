@@ -2878,6 +2878,7 @@ class CronometerClient:
         servings: float = 1.0,
         notes: str = "",
         food_type: str = "RECIPE",
+        cooked_weight_g: float | None = None,
     ) -> dict:
         """Create a custom recipe or meal. See custom_foods.build_ingredient for specs."""
         if food_type.upper() not in cf.RECIPE_TYPES:
@@ -2886,6 +2887,8 @@ class CronometerClient:
             raise ValueError("a recipe needs at least one ingredient")
         self.authenticate()
         food = cf.new_recipe(name, int(self.user_id), food_type.upper(), servings, notes)
+        if cooked_weight_g:
+            cf.set_cooked_weight(food, cooked_weight_g)
         food["ingredients"]["items"] = self._build_ingredients(ingredients, [])
         return self._summary_after_save(self._save_food(food, None))
 
@@ -2897,10 +2900,12 @@ class CronometerClient:
         servings: float | None = None,
         ingredients: list[dict] | None = None,
         update_past_entries: bool | None = None,
+        cooked_weight_g: float | None = None,
     ) -> dict:
         """Change a custom recipe or meal. ``ingredients`` replaces the whole list.
 
         Ingredient specs that carry an existing ``ingredient_id`` keep that row.
+        ``cooked_weight_g`` sets the Cooked Recipe Weight; 0 clears it.
         Raises FoodInUseError if the recipe is used and update_past_entries is None.
         """
         food = self._get_food_raw(food_id)
@@ -2912,6 +2917,8 @@ class CronometerClient:
             food["notes"] = notes
         if servings is not None:
             cf.set_servings(food, servings)
+        if cooked_weight_g is not None:
+            cf.set_cooked_weight(food, cooked_weight_g or None)
         if ingredients is not None:
             if not ingredients:
                 raise ValueError("a recipe needs at least one ingredient")

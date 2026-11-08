@@ -227,6 +227,21 @@ class TestModel:
         assert [(m["name"], m["id"], m["weight"]) for m in cf.measures(bar)] == [
             ("bar", 70, 50.0), ("half bar", 0, 25.0)]
 
+    def test_cooked_weight(self):
+        almonds = plain_food(7, 580.0, [(71, "g", 1.0, 1.0)])
+        ing = {"$class": g.INGREDIENT, "amount": 200.0, "food_id": 7, "id": "B",
+               "measure_id": 71, "unknown_4": 0}
+        bread = recipe(1, 150.0, 2, 1160.0, [ing])
+        cf.set_cooked_weight(bread, 150)
+        assert bread["properties"]["entries"][0] == ("cooked_weight", "150")
+        out = cf.summarize_food(bread, {7: almonds}, 0)
+        assert (out["original_weight_g"], out["cooked_weight_g"], out["total_weight_g"]) == (200.0, 150.0, 150.0)
+        cf.set_cooked_weight(bread, None)
+        assert cf.cooked_weight_g(bread) is None
+        assert ("advancedServingSize", "false") in bread["properties"]["entries"]
+        with pytest.raises(ValueError):
+            cf.set_cooked_weight(bread, -1)
+
     def test_set_name_and_servings(self):
         food = recipe(1, 100, 1, 100)
         cf.set_food_name(food, "Renamed")

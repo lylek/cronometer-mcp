@@ -21,7 +21,9 @@ recipe in a real account):
   still work; the server leaves these out of a recipe's weight, and so do we.
 - The server recomputes a recipe's nutrients and total weight from its
   ingredients on save, so callers only send ingredients. A ``cooked_weight``
-  property overrides the total weight; edits carry it through untouched.
+  property (the web app's Cooked Recipe Weight) replaces the ingredient total
+  as the recipe's weight, e.g. for moisture lost in cooking. The server applies
+  it on save and falls back to the ingredient total when it is removed.
 """
 
 from __future__ import annotations
@@ -147,6 +149,29 @@ def total_weight_g(food: dict) -> float | None:
     return m["weight"] / m["quantity"] if m and m["quantity"] else None
 
 
+def cooked_weight_g(food: dict) -> float | None:
+    props = food.get("properties")
+    for k, v in (props["entries"] if props else []):
+        if k == "cooked_weight":
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def set_cooked_weight(food: dict, grams: float | None) -> None:
+    """Set the Cooked Recipe Weight, or clear it with None."""
+    if grams is not None and grams <= 0:
+        raise ValueError("cooked weight must be positive")
+    if food.get("properties") is None:
+        food["properties"] = {"$class": g.HASH_MAP, "entries": []}
+    entries = [(k, v) for k, v in food["properties"]["entries"] if k != "cooked_weight"]
+    if grams is not None:
+        entries.insert(0, ("cooked_weight", f"{float(grams):g}"))
+    food["properties"]["entries"] = entries
+
+
 def grams_per_unit(food: dict, m: dict) -> float | None:
     if is_relative(m):
         total = total_weight_g(food)
@@ -240,8 +265,17 @@ def summarize_food(food: dict, children: dict[int, dict], depth: int,
         total = total_weight_g(food)
         n = servings(food)
         whole = 1.0 if whole_recipe_basis(food) else (total / 100.0 if total else None)
+        rows = [summarize_ingredient(ing, children, 0, False) for ing in items(food.get("ingredients"))]
+        known = [r["grams"] for r in rows if r["name"] is not None]
         out["servings"] = n
         out["total_weight_g"] = total
+        out["cooked_weight_g"] = cooked_weight_g(food)
+        # Sum of weighed ingredients, as the server computes it; label servings
+        # with no known weight are left out. None if an ingredient is missing.
+        out["original_weight_g"] = (
+            round(sum(x for x in known if x is not None), 3)
+            if rows and len(known) == len(rows) else None
+        )
         if whole is not None:
             out["nutrients_whole_recipe"] = summarize_nutrients(values, whole, all_nutrients)
             if n:

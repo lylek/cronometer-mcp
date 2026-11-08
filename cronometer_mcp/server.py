@@ -1361,6 +1361,7 @@ def create_custom_recipe(
     servings: float = 1.0,
     notes: str = "",
     food_type: str = "RECIPE",
+    cooked_weight_g: float | None = None,
 ) -> str:
     """Create a custom recipe or meal. Cronometer computes its nutrients.
 
@@ -1370,6 +1371,10 @@ def create_custom_recipe(
         servings: Servings per recipe.
         notes: Free-text notes.
         food_type: "RECIPE" (default) or "MEAL".
+        cooked_weight_g: Optional Cooked Recipe Weight: the finished weight
+                         after cooking (e.g. moisture loss). It replaces the
+                         ingredient total as the recipe's weight, so per-gram
+                         and per-serving values follow it.
 
     Each ingredient is an object:
         {"food_source_id": <id from search_foods or list_custom_foods>,
@@ -1381,7 +1386,9 @@ def create_custom_recipe(
     an existing ingredient row when editing, include its "ingredient_id".
     """
     try:
-        food = _get_client().create_recipe(name, ingredients, servings, notes, food_type)
+        food = _get_client().create_recipe(
+            name, ingredients, servings, notes, food_type, cooked_weight_g
+        )
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:
         return _error(e)
@@ -1395,6 +1402,7 @@ def edit_custom_recipe(
     servings: float | None = None,
     ingredients: list[dict] | None = None,
     update_past_entries: bool | None = None,
+    cooked_weight_g: float | None = None,
 ) -> str:
     """Edit a custom recipe or meal. Omitted fields are left unchanged.
 
@@ -1413,6 +1421,11 @@ def edit_custom_recipe(
         ingredients: Replacement ingredient list, the whole list (get the
                      current one with get_custom_food first).
         update_past_entries: See above. Only needed when the recipe is in use.
+        cooked_weight_g: Set the Cooked Recipe Weight (finished weight after
+                         cooking); 0 clears it so the ingredient total applies.
+                         get_custom_food shows original_weight_g (ingredient
+                         total), cooked_weight_g and the effective
+                         total_weight_g.
 
     Each ingredient is an object:
         {"food_source_id": <id from search_foods or list_custom_foods>,
@@ -1425,7 +1438,8 @@ def edit_custom_recipe(
     """
     try:
         food = _get_client().edit_recipe(
-            food_source_id, name, notes, servings, ingredients, update_past_entries
+            food_source_id, name, notes, servings, ingredients, update_past_entries,
+            cooked_weight_g,
         )
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:
