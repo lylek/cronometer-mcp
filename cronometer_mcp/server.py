@@ -10,7 +10,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
-from .client import CronometerClient
+from .client import CronometerClient, FoodInUseError
 from .markdown import generate_food_log_md
 
 logging.basicConfig(level=logging.INFO)
@@ -1303,6 +1303,211 @@ def delete_repeat_item(repeat_item_id: int) -> str:
         }, indent=2)
     except Exception as e:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
+
+
+# --- custom foods, recipes and meals ------------------------------------------
+
+def _error(e: Exception) -> str:
+    if isinstance(e, FoodInUseError):
+        return json.dumps({
+            "status": "needs_decision",
+            "food_source_id": e.food_id,
+            "usage": e.usage,
+            "message": str(e),
+        }, indent=2)
+    return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
+
+
+@_tool
+def list_custom_foods(food_type: str | None = None, query: str | None = None) -> str:
+    """List your own custom foods, recipes and meals, newest first.
+
+    Args:
+        food_type: Optional filter: "FOOD", "RECIPE" or "MEAL".
+        query: Optional case-insensitive text to match in the name.
+    """
+    try:
+        foods = _get_client().list_custom_foods(food_type, query)
+        return json.dumps({"status": "success", "count": len(foods), "foods": foods}, indent=2)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
+def get_custom_food(food_source_id: int, depth: int = 1, all_nutrients: bool = False) -> str:
+    """Show a food, recipe or meal: nutrients, serving sizes and ingredients.
+
+    Works for any food id, including database foods. Recipes report nutrients
+    for the whole recipe and per serving; plain foods per 100 g. Each
+    ingredient shows its quantity, measure, grams and calories.
+
+    Args:
+        food_source_id: Food id (from list_custom_foods or search_foods).
+        depth: Levels of nested recipes to expand inline (0 = just name them).
+        all_nutrients: Include every nutrient (unnamed ones keyed by
+                       Cronometer nutrient id), not just the common ones.
+    """
+    try:
+        food = _get_client().get_custom_food(food_source_id, depth, all_nutrients)
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def create_custom_recipe(
+    name: str,
+    ingredients: list[dict],
+    servings: float = 1.0,
+    notes: str = "",
+    food_type: str = "RECIPE",
+) -> str:
+    """Create a custom recipe or meal. Cronometer computes its nutrients.
+
+    Args:
+        name: Recipe name.
+        ingredients: Ingredient list (see below).
+        servings: Servings per recipe.
+        notes: Free-text notes.
+        food_type: "RECIPE" (default) or "MEAL".
+
+    Each ingredient is an object:
+        {"food_source_id": <id from search_foods or list_custom_foods>,
+         "grams": <weight>}  or
+        {"food_source_id": ..., "quantity": <number>, "measure": <name or measure_id>}
+    "measure" is optional: plain foods default to grams ("g"), recipes and
+    meals to "full recipe". Use get_food_details / get_custom_food to see a
+    food's measures. Recipes and meals can be ingredients (nesting). To keep
+    an existing ingredient row when editing, include its "ingredient_id".
+    """
+    try:
+        food = _get_client().create_recipe(name, ingredients, servings, notes, food_type)
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def edit_custom_recipe(
+    food_source_id: int,
+    name: str | None = None,
+    notes: str | None = None,
+    servings: float | None = None,
+    ingredients: list[dict] | None = None,
+    update_past_entries: bool | None = None,
+) -> str:
+    """Edit a custom recipe or meal. Omitted fields are left unchanged.
+
+    If the recipe is already logged in the diary or used in other recipes or
+    meals, this returns status "needs_decision" with the usage counts and
+    changes nothing. Ask the user, then call again with update_past_entries:
+    True changes the recipe in place (past diary entries change too); False
+    saves the edit as a new recipe with a new id and leaves the old one alone.
+    To copy a recipe on purpose before editing, use copy_custom_food.
+
+    Args:
+        food_source_id: Recipe or meal id.
+        name: New name.
+        notes: New notes.
+        servings: New servings per recipe.
+        ingredients: Replacement ingredient list, the whole list (get the
+                     current one with get_custom_food first).
+        update_past_entries: See above. Only needed when the recipe is in use.
+
+    Each ingredient is an object:
+        {"food_source_id": <id from search_foods or list_custom_foods>,
+         "grams": <weight>}  or
+        {"food_source_id": ..., "quantity": <number>, "measure": <name or measure_id>}
+    "measure" is optional: plain foods default to grams ("g"), recipes and
+    meals to "full recipe". Use get_food_details / get_custom_food to see a
+    food's measures. Recipes and meals can be ingredients (nesting). To keep
+    an existing ingredient row when editing, include its "ingredient_id".
+    """
+    try:
+        food = _get_client().edit_recipe(
+            food_source_id, name, notes, servings, ingredients, update_past_entries
+        )
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def edit_custom_food(
+    food_source_id: int,
+    name: str | None = None,
+    notes: str | None = None,
+    nutrients: dict[str, float] | None = None,
+    per_grams: float = 100.0,
+    measures: list[dict] | None = None,
+    update_past_entries: bool | None = None,
+) -> str:
+    """Edit one of your custom (non-recipe) foods. Omitted fields are unchanged.
+
+    The same "needs_decision" / update_past_entries rule as edit_custom_recipe
+    applies when the food is in use.
+
+    Args:
+        food_source_id: Custom food id.
+        name: New name.
+        notes: New notes.
+        nutrients: Amounts to set, keyed by name (energy_kcal, protein_g,
+                   fat_g, carbs_g, fiber_g, sugars_g, saturated_fat_g,
+                   trans_fat_g, monounsaturated_fat_g, polyunsaturated_fat_g,
+                   cholesterol_mg, sodium_mg, potassium_mg, calcium_mg, iron_mg,
+                   magnesium_mg, phosphorus_mg, zinc_mg, vitamin_c_mg, water_g,
+                   caffeine_mg, alcohol_g) or by Cronometer nutrient id. Values
+                   are for per_grams grams of food; others stay as they are.
+        per_grams: Weight the nutrient values describe (e.g. one serving's
+                   grams from the label). Default 100.
+        measures: Replacement serving sizes, the whole list:
+                  [{"name": "bar", "grams": 51}, {"name": "Tbsp", "quantity": 2,
+                  "grams": 30}]. Same-named sizes keep their ids.
+        update_past_entries: Only needed when the food is in use.
+    """
+    try:
+        food = _get_client().edit_custom_food(
+            food_source_id, name, notes, nutrients, per_grams, measures, update_past_entries
+        )
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def copy_custom_food(food_source_id: int, name: str | None = None) -> str:
+    """Copy a food, recipe or meal to a new custom item with a new id.
+
+    Args:
+        food_source_id: Item to copy.
+        name: Name for the copy (default: original name + " (copy)").
+    """
+    try:
+        food = _get_client().copy_food(food_source_id, name)
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def delete_custom_food(food_source_id: int, delete_usages: bool = False) -> str:
+    """Delete one of your custom foods, recipes or meals.
+
+    If it is logged in the diary or used in recipes/meals, this returns
+    "needs_decision" and deletes nothing. delete_usages=True deletes it anyway,
+    and Cronometer removes those diary servings and ingredient rows as well:
+    confirm with the user first.
+
+    Args:
+        food_source_id: Item to delete.
+        delete_usages: Also delete everywhere it is used.
+    """
+    try:
+        result = _get_client().delete_custom_food(food_source_id, delete_usages)
+        return json.dumps({"status": "success", "deleted": result}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
 
 
 def main():

@@ -8,6 +8,7 @@ protocol as the web app. The GWT magic values (permutation hash, header)
 may change when Cronometer deploys new builds. See README for details.
 """
 
+import copy
 import csv
 import io
 import json
@@ -20,6 +21,9 @@ from pathlib import Path
 
 import requests
 from requests.cookies import CookieConflictError
+
+from . import custom_foods as cf
+from . import gwt_foods
 
 logger = logging.getLogger(__name__)
 
@@ -358,6 +362,23 @@ REQUEST_TIMEOUT = (10, 60)
 
 class SessionExpiredError(RuntimeError):
     """Cronometer rejected the session (expired or logged out server-side)."""
+
+
+_USER_ID = object()  # placeholder in _food_rpc params
+
+
+class FoodInUseError(RuntimeError):
+    """A custom food is used elsewhere and the caller hasn't said how to save it."""
+
+    def __init__(self, food_id: int, usage: dict):
+        self.food_id = food_id
+        self.usage = usage
+        super().__init__(
+            f"Food {food_id} is used in {usage['diary_servings']} diary serving(s), "
+            f"{usage['recipes']} recipe(s) and {usage['meals']} meal(s). Pass "
+            "update_past_entries=True to change it everywhere (same id), or False "
+            "to save the changes as a new copy and leave past entries alone."
+        )
 
 
 class _GwtReader:
@@ -2720,3 +2741,246 @@ class CronometerClient:
             return items
 
         return items
+
+    # --- custom foods, recipes and meals -----------------------------------
+    #
+    # Built on gwt_foods (object codec) and custom_foods (model rules); see
+    # those modules for how Cronometer stores recipes. All ids here are Food
+    # ids, the number search_foods calls food_source_id.
+
+    def _food_rpc(self, method: str, params: list):
+        """Call a CronometerService method whose first parameter is the nonce.
+
+        Pass ``_USER_ID`` for the user id: it is only known after login.
+        """
+        self.authenticate()
+        params = [(t, int(self.user_id) if v is _USER_ID else v) for t, v in params]
+        body = gwt_foods.encode_request(
+            self.gwt_header, method, [(gwt_foods.STRING, self.nonce)] + params
+        )
+        return gwt_foods.decode_response(self._gwt_post(body))
+
+    def list_custom_foods(self, food_type: str | None = None, query: str | None = None) -> list[dict]:
+        """List the account's own foods, recipes and meals (newest first).
+
+        Args:
+            food_type: Optional filter: "FOOD", "RECIPE" or "MEAL".
+            query: Optional case-insensitive substring to match in the name.
+        """
+        hits = self._food_rpc("findMyFoods", [("I", _USER_ID)])
+        out = []
+        for h in cf.items(hits):
+            ftype = h["food_type"].name if h["food_type"] else None
+            if food_type and ftype != food_type.upper():
+                continue
+            if query and query.lower() not in (h["name"] or "").lower():
+                continue
+            out.append({
+                "food_source_id": h["id"],
+                "name": h["name"],
+                "type": ftype,
+                "source": h["source"].name if h["source"] else None,
+            })
+        return out
+
+    def get_foods_raw(self, food_ids: list[int]) -> dict[int, dict]:
+        """Fetch full Food objects (any source) by id, as decoded GWT dicts."""
+        ids = list(dict.fromkeys(int(i) for i in food_ids))
+        out: dict[int, dict] = {}
+        # The server rejects more than 25 ids per call (InvalidDataException).
+        for start in range(0, len(ids), 25):
+            res = self._food_rpc("getAllFood", [
+                (gwt_foods.ARRAY_LIST,
+                 {"$class": gwt_foods.ARRAY_LIST, "items": ids[start:start + 25]}),
+            ])
+            out.update((f["id"], f) for f in cf.items(res) if f)
+        return out
+
+    def _get_food_raw(self, food_id: int) -> dict:
+        food = self._food_rpc("getFood", [("I", int(food_id))])
+        if not food:
+            raise ValueError(f"No food with id {food_id}")
+        return food
+
+    def _load_children(self, foods: list[dict], depth: int) -> dict[int, dict]:
+        """Fetch ingredient foods, following nested recipes ``depth`` levels down."""
+        children: dict[int, dict] = {}
+        level = foods
+        for _ in range(depth + 1):
+            want = {
+                ing["food_id"] for f in level for ing in cf.items(f.get("ingredients"))
+                if ing["food_id"] not in children
+            }
+            if not want:
+                break
+            got = self.get_foods_raw(sorted(want))
+            children.update(got)
+            level = [f for f in got.values() if cf.is_recipe(f)]
+        return children
+
+    def get_custom_food(self, food_id: int, depth: int = 1, all_nutrients: bool = False) -> dict:
+        """Describe a food, recipe or meal, with ingredients for recipes.
+
+        Args:
+            food_id: Food id (food_source_id).
+            depth: How many levels of nested recipes to expand (0 = names only).
+            all_nutrients: Include every nutrient by id, not just the common ones.
+        """
+        food = self._get_food_raw(food_id)
+        children = self._load_children([food], depth)
+        return cf.summarize_food(food, children, depth, all_nutrients)
+
+    def _build_ingredients(self, specs: list[dict], existing: list[dict]) -> list[dict]:
+        by_row = {ing["id"]: ing for ing in existing}
+        foods = self.get_foods_raw([s["food_source_id"] for s in specs])
+        out = []
+        for spec in specs:
+            child = foods.get(int(spec["food_source_id"]))
+            if child is None:
+                raise ValueError(f"No food with id {spec['food_source_id']}")
+            if spec.get("ingredient_id") and spec["ingredient_id"] not in by_row:
+                raise ValueError(f"No ingredient row {spec['ingredient_id']!r} in this recipe")
+            out.append(cf.build_ingredient(spec, child, by_row.get(spec.get("ingredient_id"))))
+        return out
+
+    def food_usage(self, food_id: int) -> dict:
+        """Where a food is used: diary servings, recipes and meals."""
+        usage = self._food_rpc("getFoodUsage", [("I", _USER_ID), ("I", int(food_id))])
+        return {k: usage[k] for k in ("diary_servings", "recipes", "meals", "retire_only")}
+
+    def _save_food(self, food: dict, update_past_entries: bool | None) -> dict:
+        """Save a Food the way the web app does and return the saved object.
+
+        New foods go through addFood. An existing food that is in use needs
+        the caller's choice, as the web app's "Update old entries?" prompt
+        does: True edits it in place, False saves a copy under a new id.
+        """
+        if food["id"]:
+            usage = self.food_usage(food["id"])
+            used = usage["diary_servings"] or usage["recipes"] or usage["meals"]
+            if used and update_past_entries is None:
+                raise FoodInUseError(food["id"], usage)
+            if not used or update_past_entries:
+                return self._food_rpc("editFood", [("I", _USER_ID), (gwt_foods.FOOD, food)])
+            food = copy_for_new(food)
+        return self._food_rpc("addFood", [
+            ("I", _USER_ID), (gwt_foods.FOOD, food), (gwt_foods.INGREDIENT_SUBSTITUTIONS, None),
+        ])
+
+    def _summary_after_save(self, saved: dict) -> dict:
+        children = self._load_children([saved], 0)
+        return cf.summarize_food(saved, children, 0)
+
+    def create_recipe(
+        self,
+        name: str,
+        ingredients: list[dict],
+        servings: float = 1.0,
+        notes: str = "",
+        food_type: str = "RECIPE",
+    ) -> dict:
+        """Create a custom recipe or meal. See custom_foods.build_ingredient for specs."""
+        if food_type.upper() not in cf.RECIPE_TYPES:
+            raise ValueError("food_type must be RECIPE or MEAL")
+        if not ingredients:
+            raise ValueError("a recipe needs at least one ingredient")
+        self.authenticate()
+        food = cf.new_recipe(name, int(self.user_id), food_type.upper(), servings, notes)
+        food["ingredients"]["items"] = self._build_ingredients(ingredients, [])
+        return self._summary_after_save(self._save_food(food, None))
+
+    def edit_recipe(
+        self,
+        food_id: int,
+        name: str | None = None,
+        notes: str | None = None,
+        servings: float | None = None,
+        ingredients: list[dict] | None = None,
+        update_past_entries: bool | None = None,
+    ) -> dict:
+        """Change a custom recipe or meal. ``ingredients`` replaces the whole list.
+
+        Ingredient specs that carry an existing ``ingredient_id`` keep that row.
+        Raises FoodInUseError if the recipe is used and update_past_entries is None.
+        """
+        food = self._get_food_raw(food_id)
+        if not cf.is_recipe(food):
+            raise ValueError(f"{food_id} is a {cf.food_type(food)}, not a recipe or meal")
+        if name is not None:
+            cf.set_food_name(food, name)
+        if notes is not None:
+            food["notes"] = notes
+        if servings is not None:
+            cf.set_servings(food, servings)
+        if ingredients is not None:
+            if not ingredients:
+                raise ValueError("a recipe needs at least one ingredient")
+            food["ingredients"]["items"] = self._build_ingredients(
+                ingredients, cf.items(food["ingredients"])
+            )
+        return self._summary_after_save(self._save_food(food, update_past_entries))
+
+    def edit_custom_food(
+        self,
+        food_id: int,
+        name: str | None = None,
+        notes: str | None = None,
+        nutrients: dict | None = None,
+        per_grams: float = 100.0,
+        measures: list[dict] | None = None,
+        update_past_entries: bool | None = None,
+    ) -> dict:
+        """Change a custom (non-recipe) food.
+
+        Args:
+            nutrients: {nutrient id or name: amount} for ``per_grams`` grams.
+                Unlisted nutrients are left as they are.
+            measures: Replacement serving sizes, [{name, grams, quantity=1}].
+        """
+        food = self._get_food_raw(food_id)
+        if cf.is_recipe(food):
+            raise ValueError(f"{food_id} is a {cf.food_type(food)}; use edit_recipe")
+        if food.get("owner") != int(self.user_id):
+            raise ValueError(f"{food_id} is not one of your custom foods")
+        if name is not None:
+            cf.set_food_name(food, name)
+        if notes is not None:
+            food["notes"] = notes
+        if nutrients:
+            cf.set_nutrients(food, nutrients, per_grams)
+        if measures is not None:
+            cf.set_food_measures(food, measures)
+        return self._summary_after_save(self._save_food(food, update_past_entries))
+
+    def copy_food(self, food_id: int, name: str | None = None) -> dict:
+        """Save a copy of a custom food, recipe or meal under a new id."""
+        food = copy_for_new(self._get_food_raw(food_id))
+        food["owner"] = int(self.user_id)
+        cf.set_food_name(food, name or f"{cf.food_name(food)} (copy)")
+        return self._summary_after_save(self._save_food(food, None))
+
+    def delete_custom_food(self, food_id: int, delete_usages: bool = False) -> dict:
+        """Delete a custom food, recipe or meal.
+
+        Refuses if it is used anywhere unless delete_usages is True, in which
+        case Cronometer deletes those diary servings and ingredient rows too.
+        """
+        food = self._get_food_raw(food_id)
+        if food.get("owner") != int(self.user_id):
+            raise ValueError(f"{food_id} is not one of your custom foods")
+        usage = self.food_usage(food_id)
+        if (usage["diary_servings"] or usage["recipes"] or usage["meals"]) and not delete_usages:
+            raise FoodInUseError(food_id, usage)
+        self._food_rpc("deleteFood", [("I", int(food_id))])
+        return {"food_source_id": food_id, "name": cf.food_name(food), "usage": usage}
+
+
+def copy_for_new(food: dict) -> dict:
+    """A deep copy of ``food`` that addFood will save as a new food.
+
+    The web app only zeroes the id; the server assigns fresh measure and
+    ingredient rows.
+    """
+    new = copy.deepcopy(food)
+    new["id"] = 0
+    return new
