@@ -787,7 +787,8 @@ class CronometerClient:
             timeout=REQUEST_TIMEOUT,
         )
         resp.raise_for_status()
-        return resp.text
+        # Cronometer serves UTF-8 without a charset; requests would assume Latin-1.
+        return resp.content.decode("utf-8")
 
     def export_parsed(
         self,

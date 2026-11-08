@@ -1133,7 +1133,7 @@ class TestSessionExpiryRecovery:
         return patch.object(c, "authenticate", side_effect=authenticate)
 
     def _resp(self, text="", status=200, json=None):
-        resp = MagicMock(text=text, status_code=status)
+        resp = MagicMock(text=text, content=text.encode("utf-8"), status_code=status)
         resp.json.return_value = json
         if status >= 400:
             resp.raise_for_status.side_effect = requests.HTTPError(f"{status} Error")
@@ -1202,6 +1202,16 @@ class TestSessionExpiryRecovery:
             assert c.export_raw("daily_summary") == "Date,Energy\n"
         assert "new-nonce" in c.session.post.call_args_list[1][1]["data"]
         assert c.session.get.call_args[1]["params"]["nonce"] == "tok123"
+
+    def test_export_decodes_utf8_without_declared_charset(self, tmp_path):
+        # Cronometer omits the charset, so requests' .text would be Latin-1 mojibake.
+        c = self._make_client(tmp_path)
+        c.session.post = MagicMock(return_value=self._resp('//OK[1,["tok123"],0,7]'))
+        resp = self._resp("Food Name\nLyle\u2019s Salad\n")
+        resp.text = resp.content.decode("latin-1")
+        c.session.get = MagicMock(return_value=resp)
+        with self._fake_login(c):
+            assert c.export_raw("servings") == "Food Name\nLyle\u2019s Salad\n"
 
     def test_food_search_recovers_from_401(self, tmp_path):
         c = self._make_client(tmp_path)
