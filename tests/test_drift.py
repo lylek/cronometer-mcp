@@ -10,7 +10,7 @@ import re
 import pytest
 import requests
 
-from cronometer_mcp import client
+from cronometer_mcp import client, gwt_foods
 
 # Templates nothing calls any more; their stale types are expected.
 DEAD_TEMPLATES = {"GWT_FIND_FOODS"}
@@ -19,8 +19,9 @@ SIGNATURE_RE = re.compile(r"[\w.$\[;]+/\d{6,}")
 
 
 def template_signatures() -> dict[str, set[str]]:
-    """Type signatures used by each live GWT_* RPC template in client.py."""
-    return {
+    """Type signatures used by each live GWT_* RPC template in client.py,
+    plus every class the gwt_foods codec reads or writes."""
+    found = {
         name: set(SIGNATURE_RE.findall(value))
         for name, value in vars(client).items()
         if name.startswith("GWT_")
@@ -28,6 +29,11 @@ def template_signatures() -> dict[str, set[str]]:
         and name not in DEAD_TEMPLATES
         and SIGNATURE_RE.search(value)
     }
+    found["gwt_foods"] = {
+        value for name, value in vars(gwt_foods).items()
+        if name.isupper() and isinstance(value, str) and SIGNATURE_RE.fullmatch(value)
+    } | set(gwt_foods.LAYOUTS) | set(gwt_foods.ENUMS)
+    return found
 
 
 def policy_signatures(policy_text: str) -> set[str]:
@@ -104,6 +110,8 @@ def test_templates_found():
     names = template_signatures()
     assert "GWT_UPDATE_DIARY" in names
     assert "GWT_FIND_FOODS" not in names
+    assert gwt_foods.FOOD in names["gwt_foods"]
+    assert gwt_foods.INGREDIENT in names["gwt_foods"]
 
 
 @pytest.mark.drift
