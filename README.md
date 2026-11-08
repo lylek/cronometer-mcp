@@ -13,6 +13,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 - **Micronutrients** — detailed vitamin/mineral breakdown with period averages
 - **Diary management** — add/remove food entries, copy entire days, mark days complete
 - **Recurring foods** — create, list, and delete repeat items that auto-log on selected days
+- **Custom foods, recipes and meals** — list, inspect (with nested recipes), create, edit, copy and delete
 - **Macro targets** — read/write daily targets, create templates, set weekly schedules
 - **Fasting** — view history and stats, cancel or delete fasts
 - **Biometrics** — log and remove weight, blood glucose, heart rate, body fat
@@ -171,6 +172,24 @@ the credentials themselves keep full access.
 | `remove_food_entry` | Remove a food entry from the diary |
 | `copy_day` | Copy all diary entries from one date to another |
 | `set_day_complete` | Mark a diary day as complete or incomplete |
+
+### Custom Foods, Recipes & Meals
+
+| Tool | Description |
+|------|-------------|
+| `list_custom_foods` | List your custom foods, recipes and meals (filter by type or name) |
+| `get_custom_food` | Show nutrients, serving sizes and ingredients, expanding nested recipes |
+| `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients |
+| `edit_custom_recipe` | Rename, change servings/notes, or replace a recipe's or meal's ingredients |
+| `edit_custom_food` | Change a custom food's name, notes, nutrients or serving sizes |
+| `copy_custom_food` | Copy a food, recipe or meal to a new item with a new id |
+| `delete_custom_food` | Delete a custom food, recipe or meal |
+
+Editing an item that is already in your diary (or inside another recipe or
+meal) returns `"status": "needs_decision"` and changes nothing. Call again with
+`update_past_entries=true` to change it in place, past entries included, or
+`false` to save the edit as a new copy, matching Cronometer's "Update old
+entries?" prompt.
 
 ### Recurring Foods (Repeat Items)
 

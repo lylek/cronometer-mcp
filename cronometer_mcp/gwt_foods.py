@@ -48,6 +48,9 @@ MEASURE_TRANSLATION = _M + "MeasureTranslation/3000345244"
 NUTRIENT_MAP = _M + "NutrientMap/168231382"
 NUTRIENT = _M + "Nutrient/331784102"
 TRANSLATION = _M + "Translation/4034452093"
+SEARCH_HIT = _M + "SearchHit/1904627920"
+SEARCH_HIT_ARRAY = "[L" + _M + "SearchHit;/3199648558"
+FOOD_USAGE = _M + "FoodUsage/734642561"
 LANGUAGE = "com.cronometer.shared.user.models.Language/1257207975"
 SINGLETON_LIST = "java.util.Collections$SingletonList/1586180994"
 ADD_ENTRY_CHANGE = "com.cronometer.shared.entries.changes.AddEntryChange/3949104564"
@@ -187,6 +190,29 @@ LAYOUTS: dict[str, list[tuple[str, str]]] = {
     LOCALIZATION: [
         ("value", "str"),
     ],
+    FOOD_USAGE: [
+        # Where a food is used; the web app asks "Update old entries?" if any > 0.
+        ("meals", "int"),
+        ("recipes", "int"),
+        ("diary_servings", "int"),
+        ("retire_only", "bool"),  # delete dialog offers only "Retire"
+    ],
+    SEARCH_HIT: [
+        ("unknown_0", "int"),
+        ("unknown_1", "int"),
+        ("id", "int"),
+        ("unknown_3", "str"),
+        ("unknown_4", "str"),
+        ("unknown_5", "int"),
+        ("name", "str"),
+        ("unknown_7", "bool"),
+        ("unknown_8", "int"),
+        ("source", "obj"),
+        ("unknown_10", "str"),
+        ("unknown_11", "int"),
+        ("food_type", "obj"),
+        ("unknown_13", "int"),
+    ],
 }
 
 # --- diary and metrics ---------------------------------------------
@@ -320,7 +346,7 @@ LAYOUTS.update({
 # A Measure subclass with no extra serialized fields (seen on some CRDB foods).
 LAYOUTS[DERIVED_MEASURE] = LAYOUTS[MEASURE]
 
-_COLLECTIONS = {ARRAY_LIST, HASH_SET, LINKED_LIST, UNIT_ARRAY}
+_COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY, LINKED_LIST, UNIT_ARRAY}
 _MAPS = {HASH_MAP}
 # Values serialized as a single token: boxed numbers, and java.sql dates as a long.
 _BOXED = {INTEGER, DOUBLE, "java.lang.Long/4227064769",
