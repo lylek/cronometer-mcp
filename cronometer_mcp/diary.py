@@ -126,7 +126,7 @@ def summarize_exercise(ex: dict, group_names: dict[int, str]) -> dict:
         "date": str(to_date(ex.get("day"))),
         "time": fmt_time(ex.get("time")),
         "name": ex.get("name"),
-        "minutes": ex.get("minutes"),
+        "minutes": round(ex.get("minutes") or 0.0, 2),
         "calories_burned": round(-(ex.get("calories") or 0.0), 2),
         "source": ex.get("source") or "manual",
         "kind": "tracker_activity" if is_tracker_activity(ex) else "exercise",
@@ -146,6 +146,8 @@ def summarize_biometric(b: dict, metrics: dict[int, dict]) -> dict:
     units = metric.get("units", [])
     # Values are stored in the base unit (conversion factor 1).
     base = next((u[1] for u in units if u[2] == 1.0), units[0][1] if units else None)
+    if base == "hr:min":
+        base = "hours"  # a display format; the stored value is decimal hours
     meta = None
     if b.get("metadata"):
         try:
@@ -173,6 +175,14 @@ def summarize_biometric(b: dict, metrics: dict[int, dict]) -> dict:
             **{st["label"]: st["value"] for st in cf.items(stats.get("stats")) if st.get("label")},
         }
     if isinstance(meta, dict) and "stage_summary" in meta:
+        meta = dict(meta)
+        if isinstance(meta["stage_summary"], dict):
+            meta["stage_summary"] = {
+                k: round(v, 3) if isinstance(v, float) else v
+                for k, v in meta["stage_summary"].items()
+            }
+        if isinstance(meta.get("time_in_bed"), float):
+            meta["time_in_bed"] = round(meta["time_in_bed"], 3)
         out["sleep"] = meta
     return out
 
