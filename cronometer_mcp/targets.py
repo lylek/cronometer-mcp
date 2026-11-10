@@ -12,12 +12,19 @@ Where each setting lives in Cronometer:
 - Height, custom BMR, activity level, TEF and a custom energy target: user
   preferences, written with the GWT ``setUserPreference(key, value)`` RPC.
   A null value removes a preference.
+- Weight goal (the "Fixed Goal Plan"): preferences ``weightGoal``, the signed
+  rate in lb/week whatever the display unit (negative = lose, 0 = maintain),
+  and ``wgkg``, the goal weight in kg (absent when maintaining). The energy
+  target is BMR + baseline activity + rate x 453.59237 g x 7.7 kcal/g / 7.
+  A custom energy target or the beta Guided Goal Plan (``active.weight.goal``)
+  takes the place of the weight goal.
 - Current weight and body fat are biometrics (add_biometric).
 """
 
 from __future__ import annotations
 
-from datetime import date
+import math
+from datetime import date, timedelta
 
 from . import diary
 from . import gwt_foods as g
@@ -32,6 +39,16 @@ TEF = "use.thermic.effect.food"
 CUSTOM_ENERGY = "targets.custom.energy.target"
 CUSTOM_ENERGY_MAX = "targets.custom.energy.target.max"
 INCLUDE_EXERCISE = "targets.include.exercises"
+WEIGHT_GOAL_RATE = "weightGoal"
+GOAL_WEIGHT_KG = "wgkg"
+GUIDED_GOAL = "active.weight.goal"
+
+LB_KG = 0.45359237
+# Daily kcal per 1 lb/week of weight change, as the web client computes it.
+KCAL_PER_LB_WEEK = 453.59237 * 7.7 / 7
+# The website's goal-rate stepper: 0.25 to 2 lb/week in steps of 0.25.
+RATE_STEP_LB = 0.25
+MAX_RATE_LB = 2.0
 
 # Activity levels as BMR multipliers; a negative multiplier means a custom
 # daily kcal amount in calories.activity.custom.
@@ -130,6 +147,7 @@ def profile_summary(user: dict, day: date | None = None) -> dict:
         "body_fat_percent": fat,
         "body_fat_logged": fat_day,
         "display_units": {"height": s.get("heightUnit"), "weight": s.get("weightUnit")},
+        "weight_goal": weight_goal_summary(user, day),
         "energy": {
             "bmr_kcal": round(bmr),
             "bmr_source": "custom" if p["bmr_override"] is not None else "Mifflin-St Jeor",
@@ -142,6 +160,90 @@ def profile_summary(user: dict, day: date | None = None) -> dict:
             "include_exercise_in_energy_target": s.get(INCLUDE_EXERCISE, "true") == "true",
         },
     }
+
+
+def _pref_float(s: dict, key: str) -> float | None:
+    try:
+        return float(s[key]) if s.get(key) not in (None, "") else None
+    except ValueError:
+        return None
+
+
+def rate_kcal(rate_lb_week: float) -> int:
+    """The daily energy-target adjustment for a weight-goal rate."""
+    return math.floor(rate_lb_week * KCAL_PER_LB_WEEK + 0.5)  # Java Math.round
+
+
+def weight_goal_summary(user: dict, day: date | None = None) -> dict:
+    """The weight goal and the energy target it gives."""
+    day = day or date.today()
+    s = diary.settings(user)
+    p = diary.profile(user, day)
+    rate = _pref_float(s, WEIGHT_GOAL_RATE) or 0.0
+    goal_kg = _pref_float(s, GOAL_WEIGHT_KG)
+    weight = p["weight_kg"]
+    bmr = diary.bmr(user, day)
+    mult = p["activity_multiplier"]
+    baseline = p["custom_activity_kcal"] if mult < 0 else round(bmr * mult)
+    adjust = rate_kcal(rate)
+    custom = _pref_float(s, CUSTOM_ENERGY)
+    guided = bool(s.get(GUIDED_GOAL))
+    pounds = s.get("weightUnit", "Pounds") != "Kilograms"
+    goal = goal_kg if goal_kg is not None else weight
+    forecast = None
+    if rate and abs(goal - weight) >= 0.01 and (goal > weight) == (rate > 0):
+        weeks = abs(goal - weight) / LB_KG / abs(rate)
+        forecast = str(day + timedelta(days=math.floor(weeks * 7 + 0.5)))
+    return {
+        "goal": "Maintain Weight" if rate == 0 else ("Gain Weight" if rate > 0 else "Lose Weight"),
+        "in_effect": not guided and custom is None,
+        "replaced_by": ("Guided Goal Plan" if guided else
+                        "custom energy target" if custom is not None else None),
+        "current_weight_kg": round(weight, 2),
+        "current_weight_lb": round(weight / LB_KG, 2),
+        "goal_weight_kg": round(goal, 2),
+        "goal_weight_lb": round(goal / LB_KG, 2),
+        "rate_lb_per_week": rate,
+        "rate_kg_per_week": round(rate * LB_KG, 3),
+        "display_unit": "lb" if pounds else "kg",
+        "daily_kcal_adjustment": adjust,
+        "energy_target_kcal": round(bmr) + round(baseline) + adjust,
+        "forecast_date": forecast,
+    }
+
+
+def goal_weight_kg(user: dict) -> float | None:
+    """The saved goal weight (kg), unrounded; None when maintaining."""
+    return _pref_float(diary.settings(user), GOAL_WEIGHT_KG)
+
+
+def current_weight_kg(user: dict, day: date | None = None) -> float:
+    return diary.weight_on(user, day or date.today())[0]
+
+
+def resolve_goal(current_kg: float, goal_kg: float | None, rate: float | None,
+                 current_rate: float) -> tuple[float, float | None]:
+    """The weightGoal rate (lb/week, signed) and wgkg to save.
+
+    rate is a positive lb/week amount (None keeps the current rate); its sign
+    comes from whether the goal weight is above or below the current weight.
+    A goal weight within 0.01 kg of the current weight means maintain: rate 0
+    and no goal weight, as the website saves it.
+    """
+    goal = current_kg if goal_kg is None else goal_kg
+    if abs(goal - current_kg) < 0.01:
+        return 0.0, None
+    if rate is None:
+        rate = abs(current_rate)
+        if rate == 0:
+            raise ValueError("give a rate per week to reach a goal weight")
+    if rate <= 0:
+        raise ValueError("rate must be a positive amount per week; the goal weight sets "
+                         "the direction (to maintain, use maintain=True)")
+    if rate > MAX_RATE_LB + 1e-9:
+        raise ValueError(f"rate {rate:g} lb/week is above Cronometer's maximum of {MAX_RATE_LB:g}")
+    rate = round(rate, 3)
+    return (rate if goal > current_kg else -rate), round(goal, 4)
 
 
 def template_summary(t: dict) -> dict:

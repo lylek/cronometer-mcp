@@ -1539,10 +1539,11 @@ def set_nutrient_target(
 
 @_tool
 def get_profile() -> str:
-    """Profile and energy settings from Targets + Profile.
+    """Profile, weight goal and energy settings from Targets + Profile.
 
     Sex, birthday, age, pregnancy/lactation status, height, current weight and
-    body fat (latest logged), and the energy settings: BMR (custom or
+    body fat (latest logged); the weight goal (goal weight, rate, the energy
+    target it gives and a forecast date); and the energy settings: BMR (custom or
     Mifflin-St Jeor), activity level and its baseline kcal, thermic effect of
     food, tracker activity, and any custom energy target.
     """
@@ -1640,6 +1641,80 @@ def update_profile(
             return json.dumps({"status": "success", "message": "Nothing to change.",
                                "profile": before}, indent=2, ensure_ascii=False)
         after = _tg.profile_summary(client.get_user())
+        return json.dumps({"status": "success", "previous": before, "updated": after},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def set_weight_goal(
+    goal_weight: float | None = None,
+    rate_per_week: float | None = None,
+    units: str = "lb",
+    maintain: bool = False,
+) -> str:
+    """Set the weight goal on Targets + Profile (the website's "Fixed Goal
+    Plan"), which sets the energy target: BMR + baseline activity + about
+    500 kcal/day per lb/week to gain (minus to lose).
+
+    The goal weight decides whether you lose or gain; rate_per_week is the
+    pace. Cronometer allows up to 2 lb (0.91 kg) a week; its website offers
+    0.25 lb steps and asks you to acknowledge a warning for faster rates that
+    would leave a low energy target. The weight goal has no effect while a
+    custom energy target is set (turn it off with
+    update_profile(custom_energy_target="off")).
+
+    Args:
+        goal_weight: The goal weight, in `units`.
+        rate_per_week: How fast to get there, a positive amount in `units`
+            per week. Omit to keep the current rate.
+        units: "lb" or "kg", for both goal_weight and rate_per_week.
+        maintain: Maintain the current weight (clears the goal weight and rate).
+    """
+    try:
+        unit = units.strip().lower().rstrip("s")
+        if unit in ("lb", "pound"):
+            to_kg = _tg.LB_KG
+        elif unit in ("kg", "kilogram"):
+            to_kg = 1.0
+        else:
+            raise ValueError(f"units must be 'lb' or 'kg', not {units!r}")
+        if maintain and (goal_weight is not None or rate_per_week is not None):
+            raise ValueError("give maintain=True or a goal weight/rate, not both")
+        if not maintain and goal_weight is None and rate_per_week is None:
+            raise ValueError("give goal_weight, rate_per_week, or maintain=True")
+
+        client = _get_client()
+        user = client.get_user()
+        before = _tg.weight_goal_summary(user)
+        if before["replaced_by"] == "Guided Goal Plan":
+            raise ValueError("a Guided Goal Plan is active; change it on the website")
+        if before["replaced_by"] == "custom energy target" and not maintain:
+            raise ValueError("a custom energy target is set, so a weight goal would have no "
+                             "effect; turn it off first with "
+                             'update_profile(custom_energy_target="off")')
+        current = _tg.current_weight_kg(user)
+        if maintain:
+            rate, goal_kg = 0.0, None
+        else:
+            prev_goal = None if before["rate_lb_per_week"] == 0 else _tg.goal_weight_kg(user)
+            goal = goal_weight * to_kg if goal_weight is not None else prev_goal
+            if goal is None:
+                raise ValueError("no goal weight is set; give goal_weight too")
+            if not 20 <= goal <= 400:
+                raise ValueError(f"goal weight {goal_weight} {units} is out of range")
+            rate_lb = None if rate_per_week is None else rate_per_week * to_kg / _tg.LB_KG
+            rate, goal_kg = _tg.resolve_goal(current, goal, rate_lb, before["rate_lb_per_week"])
+        saved_goal = _tg.goal_weight_kg(user)
+        if rate == before["rate_lb_per_week"] and (
+                saved_goal is None if goal_kg is None
+                else saved_goal is not None and abs(goal_kg - saved_goal) < 0.005):
+            return json.dumps({"status": "success", "message": "Nothing to change.",
+                               "weight_goal": before}, indent=2, ensure_ascii=False)
+        client.set_preference(_tg.WEIGHT_GOAL_RATE, _pref_num(rate))
+        client.set_preference(_tg.GOAL_WEIGHT_KG, None if goal_kg is None else _pref_num(goal_kg))
+        after = _tg.weight_goal_summary(client.get_user())
         return json.dumps({"status": "success", "previous": before, "updated": after},
                           indent=2, ensure_ascii=False)
     except Exception as e:
