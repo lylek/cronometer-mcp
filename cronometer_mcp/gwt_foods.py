@@ -1,4 +1,8 @@
-"""GWT-RPC object codec for Cronometer's food model (foods, recipes, meals).
+"""GWT-RPC object codec for Cronometer's object model.
+
+Covers foods, recipes and meals, a day's diary entries (servings, exercises,
+biometrics, notes), the logged-in User (profile, settings, weight history)
+and the biometric metric catalog.
 
 The macro-target code in client.py reads a handful of fixed shapes by hand.
 Recipes are different: a Food carries nested measures, a nutrient map,
@@ -51,7 +55,47 @@ FOOD_USAGE = _M + "FoodUsage/734642561"
 LANGUAGE = "com.cronometer.shared.user.models.Language/1257207975"
 LOCALIZATION = "com.cronometer.shared.localization.Localization/2254641304"
 
+_E = "com.cronometer.shared.entries.models."
+_U = "com.cronometer.shared.user."
+
+DAY = _E + "Day/782579793"
+TIME = _E + "Time/1552252503"
+DAY_INFO = _E + "DayInfo/416556043"
+SERVING = _E + "Serving/2895043750"
+DIARY_GROUP = _E + "DiaryGroup/1846062643"
+EXERCISE = "com.cronometer.shared.exercise.Exercise/2894167537"
+BIOMETRIC = "com.cronometer.shared.biometrics.Biometric/2989635787"
+SLEEP_BIOMETRIC = "com.cronometer.shared.sleep.SleepBiometric/489251654"
+NOTE = "com.cronometer.shared.notes.Note/252681293"
+METRIC = "com.cronometer.shared.metrics.Metric/4111043909"
+UNIT = _E + "Unit/128683555"
+UNIT_ARRAY = "[L" + _E + "Unit;/391530421"
+USER = _U + "models.User/91151502"
+USER_PREFERENCES = _U + "models.UserPreferences/1003470664"
+BIOMETRIC_HISTORY = "com.cronometer.shared.biometrics.BiometricHistory/3940541420"
+BODY_FAT_HISTORY = "com.cronometer.shared.biometrics.BodyFatPercentBiometricHistory/774386790"
+DATA_POINT = "com.cronometer.shared.charts.models.DataPoint/3560061380"
+BRAZE_EVENT = "com.cronometer.shared.braze.models.BrazeEvent/1015848879"
+FAVOURITE_FOOD = _M + "FavouriteFood/2337815137"
+GOLD_STATUS = _U + "models.GoldStatus/1501850739"
+GOLD_PRODUCT_GRANT = _U + "models.GoldProductGrant/1713595410"
+MACRO_TARGETS_CONTEXT = "com.cronometer.shared.targets.MacroTargetsContext/4067100785"
+LINKED_LIST = "java.util.LinkedList/3953877921"
+SQL_DATE = "java.sql.Date/730999118"
+SAMPLE_STATS = "com.cronometer.shared.biometrics.SampleStats/1121030289"
+SAMPLE_STAT = "com.cronometer.shared.biometrics.SampleStat/4191588438"
+SAMPLE_STAT_TYPE = "com.cronometer.shared.biometrics.SampleStat$SampleStatType/3708992629"
+DAY_AND_TIME = _E + "DayAndTime/1495394183"
+SLEEP_SUMMARY = "com.cronometer.shared.sleep.SleepSummary/1875351125"
+GENDER = _U + "Gender/2456086264"
+REPRODUCTIVE_STATUS = _U + "ReproductiveStatus/1664778317"
+
 ENUMS = {
+    GENDER: ["Male", "Female", "Other"],
+    REPRODUCTIVE_STATUS: ["Normal", "Pregnant", "Lactating", "Menopausal"],
+    SAMPLE_STAT_TYPE: ["MAX", "MIN", "LATEST", "MEAN", "OTHER"],
+    _U + "AccountState/3173264896": None,
+    _U + "LoginSite/3970781398": None,
     _F + "FoodSource/4236433762": [
         "All", "USDA", "FDCBranded", "CNF", "CRDB", "IFCDB", "Custom", "NUTTAB",
         "NCCDB", "Nutritionix", "USDAWeb", "Data_Entry", "Unknown", "CoFID",
@@ -171,11 +215,220 @@ LAYOUTS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
+# --- diary, profile and metrics ---------------------------------------------
+# Field names below are ours too; "unknown_*" fields round-trip untouched.
+
+_BIOMETRIC_FIELDS = [
+    ("value", "double"),  # in the metric's base unit (kg, bpm, hours...)
+    ("day", "obj"),
+    ("external_id", "str"),
+    ("id", "long"),
+    ("metadata", "str"),  # JSON, e.g. Garmin sample statistics
+    ("metric_id", "int"),
+    ("tz_offset", "obj"),
+    ("order", "int"),
+    ("sample_stats", "obj"),  # SampleStats for metrics sampled overnight (HRV...)
+    ("unknown_9", "obj"),
+    ("unknown_10", "obj"),
+    ("source", "str"),
+    ("time", "obj"),
+    ("unit_id", "int"),  # the unit it was entered in
+    ("owner", "int"),
+]
+
+LAYOUTS.update({
+    DAY: [("day", "int"), ("month", "int"), ("year", "int")],
+    TIME: [("hour", "int"), ("minute", "int"), ("second", "int")],
+    DAY_INFO: [
+        ("unknown_0", "bool"),
+        ("day", "obj"),
+        ("entries", "obj"),
+        ("unknown_3", "obj"),
+        ("unknown_4", "bool"),
+        ("properties", "str"),
+    ],
+    SERVING: [
+        ("day", "obj"),
+        ("unknown_1", "bool"),
+        ("unknown_2", "bool"),
+        ("tz_offset", "obj"),
+        ("order", "int"),  # diary group in the high 16 bits
+        ("time", "obj"),
+        ("owner", "int"),
+        ("amount", "double"),  # grams, or a count of a recipe-relative measure
+        ("food_id", "int"),
+        ("id", "long"),
+        ("measure_id", "int"),
+        ("unknown_11", "int"),
+    ],
+    EXERCISE: [
+        ("exercise_type_id", "int"),
+        ("unknown_1", "int"),
+        ("unknown_2", "bool"),
+        ("calories", "double"),  # negative: energy burned
+        ("day", "obj"),
+        ("id", "long"),
+        ("external_id", "str"),
+        ("metadata", "str"),  # JSON from the tracker, if any
+        ("minutes", "double"),
+        ("name", "str"),
+        ("tz_offset", "obj"),
+        ("order", "int"),
+        ("source", "str"),  # "Garmin", "Fitbit"... or None if entered by hand
+        ("time", "obj"),
+        ("owner", "int"),
+        ("unknown_15", "double"),
+    ],
+    BIOMETRIC: _BIOMETRIC_FIELDS,
+    SLEEP_BIOMETRIC: [("sleep", "obj")] + _BIOMETRIC_FIELDS,
+    NOTE: [
+        ("day", "obj"),
+        ("id", "long"),
+        ("unknown_2", "str"),
+        ("tz_offset", "obj"),
+        ("order", "int"),
+        ("text", "str"),
+        ("time", "obj"),
+        ("owner", "int"),
+    ],
+    DIARY_GROUP: [
+        ("day", "obj"),
+        ("unknown_1", "bool"),
+        ("group", "int"),
+        ("user", "obj"),
+    ],
+    SAMPLE_STATS: [
+        ("count", "int"),
+        ("earliest", "obj"),
+        ("earliest_value", "double"),
+        ("stats", "obj"),
+        ("latest", "obj"),
+        ("latest_value", "double"),
+        ("max", "double"),
+        ("mean", "double"),
+        ("min", "double"),
+        ("sum", "double"),
+    ],
+    SAMPLE_STAT: [("label", "str"), ("type", "obj"), ("unit", "str"), ("value", "double")],
+    DAY_AND_TIME: [("day", "obj"), ("time", "obj"), ("timestamp", "long")],
+    SLEEP_SUMMARY: [
+        ("unknown_0", "double"),
+        ("unknown_1", "str"),
+        ("unknown_2", "double"),
+        ("unknown_3", "obj"),
+        ("unknown_4", "obj"),
+        ("unknown_5", "double"),
+        ("unknown_6", "str"),
+        ("unknown_7", "double"),
+        ("unknown_8", "double"),
+        ("unknown_9", "str"),
+        ("unknown_10", "double"),
+        ("unknown_11", "double"),
+        ("unknown_12", "str"),
+        ("unknown_13", "double"),
+        ("unknown_14", "double"),
+        ("unknown_15", "double"),
+        ("unknown_16", "str"),
+        ("unknown_17", "obj"),
+    ],
+    METRIC: [
+        ("unknown_0", "bool"),
+        ("id", "int"),
+        ("icon", "str"),
+        ("unknown_3", "bool"),
+        ("name", "str"),
+        ("units", "obj"),
+        ("unknown_6", "int"),
+    ],
+    UNIT: [("factor", "double"), ("id", "int"), ("name", "str")],
+    USER: [
+        ("unknown_0", "long"),
+        ("account_state", "obj"),
+        ("unknown_2", "str"),
+        ("birthday", "obj"),
+        ("body_fat_history", "obj"),
+        ("braze_events", "obj"),
+        ("unknown_6", "obj"),
+        ("unknown_7", "obj"),
+        ("connected_apps", "obj"),
+        ("unknown_9", "str"),
+        ("email", "str"),
+        ("favourite_foods", "obj"),
+        ("name", "str"),
+        ("unknown_13", "obj"),
+        ("gender", "obj"),
+        ("gold_status", "obj"),
+        ("unknown_16", "str"),
+        ("unknown_17", "bool"),
+        ("unknown_18", "str"),
+        ("id", "int"),
+        ("unknown_20", "bool"),
+        ("unknown_21", "long"),
+        ("unknown_22", "long"),
+        ("localization", "obj"),
+        ("unknown_24", "obj"),
+        ("energy_target", "obj"),
+        ("macro_targets_context", "obj"),
+        ("unknown_27", "bool"),
+        ("settings", "obj"),
+        ("unknown_29", "obj"),
+        ("flags", "obj"),
+        ("unknown_31", "bool"),
+        ("unknown_32", "long"),
+        ("nonce", "str"),
+        ("login_site", "obj"),
+        ("unknown_35", "str"),
+        ("reproductive_status", "obj"),
+        ("unknown_37", "obj"),
+        ("unknown_38", "obj"),
+        ("unknown_39", "obj"),
+        ("time_zone", "str"),
+        ("weight_history", "obj"),
+    ],
+    BIOMETRIC_HISTORY: [
+        ("points", "obj"),
+        ("unknown_1", "int"),
+        ("unknown_2", "int"),
+        ("owner", "int"),
+    ],
+    DATA_POINT: [("day", "obj"), ("time", "obj"), ("value", "double")],
+    BRAZE_EVENT: [("name", "str"), ("date", "obj")],
+    FAVOURITE_FOOD: [("food_id", "int"), ("unknown_1", "int")],
+    GOLD_STATUS: [
+        ("grant", "obj"),
+        ("unknown_1", "int"),
+        ("unknown_2", "long"),
+        ("unknown_3", "obj"),
+    ],
+    GOLD_PRODUCT_GRANT: [
+        ("unknown_0", "obj"),
+        ("unknown_1", "long"),
+        ("unknown_2", "obj"),
+        ("unknown_3", "str"),
+        ("unknown_4", "str"),
+        ("unknown_5", "str"),
+        ("unknown_6", "str"),
+        ("unknown_7", "obj"),
+        ("unknown_8", "int"),
+    ],
+    MACRO_TARGETS_CONTEXT: [(f"unknown_{i}", "double") for i in range(10)] + [
+        ("unknown_10", "obj"),
+        ("unknown_11", "double"),
+        ("unknown_12", "double"),
+        ("unknown_13", "double"),
+        ("unknown_14", "obj"),
+    ],
+})
+LAYOUTS[BODY_FAT_HISTORY] = LAYOUTS[BIOMETRIC_HISTORY]
+
 # A Measure subclass with no extra serialized fields (seen on some CRDB foods).
 LAYOUTS[DERIVED_MEASURE] = LAYOUTS[MEASURE]
 
-_COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY}
-_BOXED = {INTEGER, "java.lang.Double/858496421", "java.lang.Long/4227064769"}
+_COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY, LINKED_LIST, UNIT_ARRAY}
+_MAPS = {HASH_MAP, USER_PREFERENCES}
+# Values serialized as a single token: boxed numbers, and java.sql dates as a long.
+_BOXED = {INTEGER, "java.lang.Double/858496421", "java.lang.Long/4227064769",
+          "java.lang.Short/551743396", SQL_DATE}
 
 
 @dataclass(frozen=True)
@@ -266,7 +519,7 @@ class _Decoder:
             return GwtEnum(sig, self.next())
         if sig in _COLLECTIONS:
             return {"$class": sig, "items": [self.object() for _ in range(self.next())]}
-        if sig == HASH_MAP:
+        if sig in _MAPS:
             n = self.next()
             return {"$class": sig, "entries": [(self.object(), self.object()) for _ in range(n)]}
         if sig == INGREDIENT_SUBSTITUTIONS:
@@ -421,7 +674,7 @@ class _Encoder:
             self.emit(len(v["items"]))
             for item in v["items"]:
                 self.object(item)
-        elif sig == HASH_MAP:
+        elif sig in _MAPS:
             self.emit(len(v["entries"]))
             for k, item in v["entries"]:
                 self.object(k)

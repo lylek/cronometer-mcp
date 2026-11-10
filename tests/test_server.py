@@ -41,13 +41,13 @@ class TestReadOnlyMode:
     def test_default_registers_write_tools(self):
         names = _tool_names({"CRONOMETER_READ_ONLY": ""})
         assert WRITE_TOOLS <= names
-        assert len(names) == 34
+        assert len(names) == 37
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
     def test_read_only_drops_every_write_tool(self, value):
         names = _tool_names({"CRONOMETER_READ_ONLY": value})
         assert not names & WRITE_TOOLS
-        assert len(names) == 34 - len(WRITE_TOOLS)
+        assert len(names) == 37 - len(WRITE_TOOLS)
         assert {"get_food_log", "search_foods", "get_macro_targets",
                 "sync_cronometer"} <= names
 
