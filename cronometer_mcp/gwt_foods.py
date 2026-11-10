@@ -1,7 +1,8 @@
 """GWT-RPC object codec for Cronometer's object model.
 
 Covers foods, recipes and meals, a day's diary entries (servings, exercises,
-biometrics, notes) and the biometric metric catalog.
+biometrics, notes), the logged-in User (profile, settings, weight history)
+and the biometric metric catalog.
 
 The macro-target code in client.py reads a handful of fixed shapes by hand.
 Recipes are different: a Food carries nested measures, a nutrient map,
@@ -71,6 +72,16 @@ NOTE = "com.cronometer.shared.notes.Note/252681293"
 METRIC = "com.cronometer.shared.metrics.Metric/4111043909"
 UNIT = _E + "Unit/128683555"
 UNIT_ARRAY = "[L" + _E + "Unit;/391530421"
+USER = _U + "models.User/91151502"
+USER_PREFERENCES = _U + "models.UserPreferences/1003470664"
+BIOMETRIC_HISTORY = "com.cronometer.shared.biometrics.BiometricHistory/3940541420"
+BODY_FAT_HISTORY = "com.cronometer.shared.biometrics.BodyFatPercentBiometricHistory/774386790"
+DATA_POINT = "com.cronometer.shared.charts.models.DataPoint/3560061380"
+BRAZE_EVENT = "com.cronometer.shared.braze.models.BrazeEvent/1015848879"
+FAVOURITE_FOOD = _M + "FavouriteFood/2337815137"
+GOLD_STATUS = _U + "models.GoldStatus/1501850739"
+GOLD_PRODUCT_GRANT = _U + "models.GoldProductGrant/1713595410"
+MACRO_TARGETS_CONTEXT = "com.cronometer.shared.targets.MacroTargetsContext/4067100785"
 LINKED_LIST = "java.util.LinkedList/3953877921"
 SQL_DATE = "java.sql.Date/730999118"
 SAMPLE_STATS = "com.cronometer.shared.biometrics.SampleStats/1121030289"
@@ -78,11 +89,17 @@ SAMPLE_STAT = "com.cronometer.shared.biometrics.SampleStat/4191588438"
 SAMPLE_STAT_TYPE = "com.cronometer.shared.biometrics.SampleStat$SampleStatType/3708992629"
 DAY_AND_TIME = _E + "DayAndTime/1495394183"
 SLEEP_SUMMARY = "com.cronometer.shared.sleep.SleepSummary/1875351125"
+GENDER = _U + "Gender/2456086264"
+REPRODUCTIVE_STATUS = _U + "ReproductiveStatus/1664778317"
 BOOLEAN = "java.lang.Boolean/476441737"
 DOUBLE = "java.lang.Double/858496421"
 
 ENUMS = {
+    GENDER: ["Male", "Female", "Other"],
+    REPRODUCTIVE_STATUS: ["Normal", "Pregnant", "Lactating", "Menopausal"],
     SAMPLE_STAT_TYPE: ["MAX", "MIN", "LATEST", "MEAN", "OTHER"],
+    _U + "AccountState/3173264896": None,
+    _U + "LoginSite/3970781398": None,
     _F + "FoodSource/4236433762": [
         "All", "USDA", "FDCBranded", "CNF", "CRDB", "IFCDB", "Custom", "NUTTAB",
         "NCCDB", "Nutritionix", "USDAWeb", "Data_Entry", "Unknown", "CoFID",
@@ -215,7 +232,7 @@ LAYOUTS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-# --- diary and metrics ---------------------------------------------
+# --- diary, profile and metrics ---------------------------------------------
 # Field names below are ours too; "unknown_*" fields round-trip untouched.
 
 _BIOMETRIC_FIELDS = [
@@ -341,13 +358,91 @@ LAYOUTS.update({
         ("unknown_6", "int"),
     ],
     UNIT: [("factor", "double"), ("id", "int"), ("name", "str")],
+    USER: [
+        ("unknown_0", "long"),
+        ("account_state", "obj"),
+        ("unknown_2", "str"),
+        ("birthday", "obj"),
+        ("body_fat_history", "obj"),
+        ("braze_events", "obj"),
+        ("unknown_6", "obj"),
+        ("unknown_7", "obj"),
+        ("connected_apps", "obj"),
+        ("unknown_9", "str"),
+        ("email", "str"),
+        ("favourite_foods", "obj"),
+        ("name", "str"),
+        ("unknown_13", "obj"),
+        ("gender", "obj"),
+        ("gold_status", "obj"),
+        ("unknown_16", "str"),
+        ("unknown_17", "bool"),
+        ("unknown_18", "str"),
+        ("id", "int"),
+        ("unknown_20", "bool"),
+        ("unknown_21", "long"),
+        ("unknown_22", "long"),
+        ("localization", "obj"),
+        ("unknown_24", "obj"),
+        ("energy_target", "obj"),
+        ("macro_targets_context", "obj"),
+        ("unknown_27", "bool"),
+        ("settings", "obj"),
+        ("unknown_29", "obj"),
+        ("flags", "obj"),
+        ("unknown_31", "bool"),
+        ("unknown_32", "long"),
+        ("nonce", "str"),
+        ("login_site", "obj"),
+        ("unknown_35", "str"),
+        ("reproductive_status", "obj"),
+        ("unknown_37", "obj"),
+        ("unknown_38", "obj"),
+        ("unknown_39", "obj"),
+        ("time_zone", "str"),
+        ("weight_history", "obj"),
+    ],
+    BIOMETRIC_HISTORY: [
+        ("points", "obj"),
+        ("unknown_1", "int"),
+        ("unknown_2", "int"),
+        ("owner", "int"),
+    ],
+    DATA_POINT: [("day", "obj"), ("time", "obj"), ("value", "double")],
+    BRAZE_EVENT: [("name", "str"), ("date", "obj")],
+    FAVOURITE_FOOD: [("food_id", "int"), ("unknown_1", "int")],
+    GOLD_STATUS: [
+        ("grant", "obj"),
+        ("unknown_1", "int"),
+        ("unknown_2", "long"),
+        ("unknown_3", "obj"),
+    ],
+    GOLD_PRODUCT_GRANT: [
+        ("unknown_0", "obj"),
+        ("unknown_1", "long"),
+        ("unknown_2", "obj"),
+        ("unknown_3", "str"),
+        ("unknown_4", "str"),
+        ("unknown_5", "str"),
+        ("unknown_6", "str"),
+        ("unknown_7", "obj"),
+        ("unknown_8", "int"),
+    ],
+    MACRO_TARGETS_CONTEXT: [(f"unknown_{i}", "double") for i in range(10)] + [
+        ("unknown_10", "obj"),
+        ("unknown_11", "double"),
+        ("unknown_12", "double"),
+        ("unknown_13", "double"),
+        ("unknown_14", "obj"),
+    ],
 })
+LAYOUTS[BODY_FAT_HISTORY] = LAYOUTS[BIOMETRIC_HISTORY]
 
 # A Measure subclass with no extra serialized fields (seen on some CRDB foods).
 LAYOUTS[DERIVED_MEASURE] = LAYOUTS[MEASURE]
 
 _COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY, LINKED_LIST, UNIT_ARRAY}
-_MAPS = {HASH_MAP}
+_MAPS = {HASH_MAP, USER_PREFERENCES}
 # Values serialized as a single token: boxed numbers, and java.sql dates as a long.
 _BOXED = {INTEGER, DOUBLE, "java.lang.Long/4227064769",
           "java.lang.Short/551743396", SQL_DATE}
