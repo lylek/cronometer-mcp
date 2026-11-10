@@ -15,7 +15,8 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 - **Recurring foods** — create, list, and delete repeat items that auto-log on selected days
 - **Custom foods, recipes and meals** — list, inspect (with nested recipes), create, edit, copy and delete
 - **Exercise, biometrics and energy expenditure** — exercises (tracker activity vs workouts), daily biometrics incl. Garmin sleep/HRV, and the Diary page's BMR / baseline / tracker / exercise / TEF breakdown, read without using CSV export quota
-- **Macro targets** — read/write daily targets, create templates, set weekly schedules
+- **Macro targets** — read/write daily targets, apply a saved template to one day, create templates, set weekly schedules
+- **Nutrient targets & profile** — read and edit every nutrient target (min, max, visibility, custom vs default), sex, birthday, pregnancy status, height, BMR, activity level, TEF and a custom energy target
 - **Fasting** — view history and stats, cancel or delete fasts
 - **Biometrics** — log and remove weight, blood glucose, heart rate, body fat
 - **Raw CSV export** — servings, daily summary, exercises, biometrics, or notes
@@ -216,11 +217,25 @@ server repeats that calculation from your profile, settings and diary.
 
 | Tool | Description |
 |------|-------------|
-| `get_macro_targets` | Get daily macro targets (or full weekly schedule with `target_date="all"`) |
+| `get_macro_targets` | Get daily macro targets (or full weekly schedule with `target_date="all"`); `source` says whether they're set for that day or come from the weekly schedule |
 | `set_macro_targets` | Update daily macro targets (partial updates supported) |
+| `apply_macro_template` | Use a saved template for one day (Daily Target Editor) |
 | `list_macro_templates` | List all saved macro target templates |
 | `create_macro_template` | Create a new saved macro target template |
 | `set_weekly_macro_schedule` | Assign a template to days of the week as the recurring default |
+
+### Nutrient Targets & Profile
+
+| Tool | Description |
+|------|-------------|
+| `get_nutrient_targets` | Every nutrient target with name, unit, min, max, visibility and whether it's custom |
+| `set_nutrient_target` | Set a nutrient's min/max (making it custom), show/hide it, or go back to the default |
+| `get_profile` | Sex, birthday, pregnancy status, height, weight, body fat, BMR, activity level, TEF and energy target settings |
+| `update_profile` | Change any of the above (weight and body fat are logged with `add_biometric`) |
+
+Nutrients can be named ("Vitamin D", "sodium", "B12") or given by id. After a
+change to sex, birthday, pregnancy status or height, the default targets are
+recomputed, as the website does.
 
 ### Fasting
 

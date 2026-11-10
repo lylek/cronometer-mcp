@@ -93,6 +93,9 @@ GENDER = _U + "Gender/2456086264"
 REPRODUCTIVE_STATUS = _U + "ReproductiveStatus/1664778317"
 BOOLEAN = "java.lang.Boolean/476441737"
 DOUBLE = "java.lang.Double/858496421"
+_T = "com.cronometer.shared.targets.models."
+TARGET = _T + "Target/3515640666"
+MACRO_TARGET_TEMPLATE = _T + "MacroTargetTemplate/3691130822"
 
 ENUMS = {
     GENDER: ["Male", "Female", "Other"],
@@ -437,6 +440,36 @@ LAYOUTS.update({
     ],
 })
 LAYOUTS[BODY_FAT_HISTORY] = LAYOUTS[BIOMETRIC_HISTORY]
+
+LAYOUTS.update({
+    # A nutrient target. min and max are boxed Doubles (null = no target).
+    # custom=False means Cronometer's DRI default for the profile.
+    TARGET: [
+        ("custom", "bool"),
+        ("max", "obj"),
+        ("min", "obj"),
+        ("nutrient_id", "int"),
+        ("visible", "bool"),
+    ],
+    # Saved macro templates and per-day targets. In ratio mode (macro_mode 6)
+    # protein/carbs/fat are percentages of energy; otherwise grams.
+    MACRO_TARGET_TEMPLATE: [
+        ("unknown_0", "obj"),
+        ("carbs", "obj"),
+        ("unknown_2", "obj"),
+        ("day", "obj"),
+        ("calories", "obj"),
+        ("fat", "obj"),
+        ("unknown_6", "obj"),
+        ("unknown_7", "bool"),
+        ("id", "obj"),
+        ("unknown_9", "str"),
+        ("macro_mode", "int"),
+        ("name", "str"),
+        ("protein", "obj"),
+        ("unknown_13", "obj"),
+    ],
+})
 
 # A Measure subclass with no extra serialized fields (seen on some CRDB foods).
 LAYOUTS[DERIVED_MEASURE] = LAYOUTS[MEASURE]
