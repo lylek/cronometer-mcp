@@ -48,8 +48,8 @@ _APPLE_HEALTH_ACTIVITY = frozenset({
 })
 
 WAKING_MINUTES = 960  # baseline activity is spread over 16 waking hours
-ACTIVITY_LEVELS = {0.2: "Sedentary", 0.375: "Lightly Active", 0.5: "Moderately Active",
-                   0.9: "Very Active"}
+ACTIVITY_LEVELS = {0.0: "None", 0.2: "Sedentary", 0.375: "Lightly Active",
+                   0.5: "Moderately Active", 0.9: "Very Active"}
 _MS_PER_YEAR = 31556930400  # the web client's year length for ages
 
 

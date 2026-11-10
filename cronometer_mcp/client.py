@@ -25,6 +25,7 @@ from requests.cookies import CookieConflictError
 from . import custom_foods as cf
 from . import diary
 from . import gwt_foods
+from . import targets as tg
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,9 @@ EXPORT_URL = "https://cronometer.com/export"
 # parameter type was removed from Cronometer's serialization policy, so
 # calling it returns IncompatibleRemoteServiceException.
 FOOD_SEARCH_URL = "https://cronometer.com/api/v3/user/{user_id}/food-search/string"
+# Nutrient targets (read) and sex/birthday/pregnancy (write) are REST calls.
+TARGETS_URL = "https://cronometer.com/api/v3/user/{user_id}/targets"
+PROFILE_URL = "https://cronometer.com/api/v3/user/{user_id}/profile"
 GWT_NOCACHE_JS_URL = "https://cronometer.com/cronometer/cronometer.nocache.js"
 GWT_CACHE_JS_URL = "https://cronometer.com/cronometer/{permutation}.cache.js"
 
@@ -1702,7 +1706,21 @@ class CronometerClient:
             .replace("{year}", str(day.year))
         )
         raw = self._gwt_post(body)
-        return self._parse_macro_target_template(raw)
+        if raw.startswith("//OK") and gwt_foods.decode_response(raw) is None:
+            # Nothing pinned to this day: it follows the weekly schedule.
+            return self._scheduled_targets(day)
+        return {**self._parse_macro_target_template(raw), "source": "day"}
+
+    def _scheduled_targets(self, day: date) -> dict:
+        dow = (day.weekday() + 1) % 7  # schedules count from Sunday = 0
+        for s in self.get_all_macro_schedules():
+            if s["day_of_week"] == dow:
+                out = {k: s[k] for k in ("protein_g", "fat_g", "calories", "carbs_g",
+                                         "template_name")}
+                return {**out, "source": "weekly_schedule"}
+        # No template for this weekday: the profile's own macro settings apply.
+        return {"protein_g": None, "fat_g": None, "calories": None, "carbs_g": None,
+                "template_name": None, "source": "none"}
 
     def update_daily_targets(
         self,
@@ -3066,6 +3084,76 @@ class CronometerClient:
             totals = diary.day_totals(day_entries, foods)
             out.append(diary.energy_expenditure(totals, user, d))
         return {"profile": diary.profile(user, days[-1]), "days": out}
+
+    # --- targets and profile (see targets.py) ---------------------------------
+
+    def _rest(self, method: str, url: str, **kw) -> requests.Response:
+        """A REST call on the logged-in session, re-authenticating once on 401/403."""
+        self.authenticate()
+        for attempt in range(2):
+            resp = self.session.request(
+                method, url.format(user_id=self.user_id), timeout=REQUEST_TIMEOUT, **kw
+            )
+            if resp.status_code in (401, 403) and not attempt:
+                self._reauthenticate()
+                continue
+            resp.raise_for_status()
+            return resp
+        raise AssertionError("unreachable")
+
+    def get_nutrient_targets(self) -> list[dict]:
+        """Raw target rows: [{id, min, max, vis, custom}] (REST)."""
+        return self._rest("GET", TARGETS_URL).json()
+
+    def set_nutrient_target(self, target: dict) -> None:
+        """Save one nutrient target (a GWT Target from targets.target_obj)."""
+        self._food_rpc("setTarget", [(gwt_foods.TARGET, target), ("I", _USER_ID)])
+
+    def init_targets(self) -> None:
+        """Recompute default (non-custom) targets from the profile, as the web
+        app does after any profile change."""
+        self._food_rpc("initTargets", [("I", _USER_ID)])
+
+    def set_preference(self, key: str, value: str | None) -> None:
+        """Set a user preference; None removes it."""
+        self._food_rpc("setUserPreference", [
+            ("I", _USER_ID), (gwt_foods.STRING, key), (gwt_foods.STRING, value),
+        ])
+
+    def update_profile(self, birthday: date, sex: str, reproductive_status: str) -> None:
+        """Save sex, birthday and pregnancy/lactation status. Call
+        init_targets() afterwards so the DRI defaults follow."""
+        self._rest("PUT", PROFILE_URL, json={
+            "birthdate": birthday.isoformat(),
+            "gender": sex,
+            "reproductiveStatus": reproductive_status,
+        })
+
+    def get_macro_templates_raw(self) -> list[dict]:
+        """Saved macro target templates as GWT MacroTargetTemplate dicts."""
+        res = self._food_rpc("getMacroTargetTemplates", [("I", _USER_ID)])
+        return cf.items(res)
+
+    def get_day_macro_template(self, day: date) -> dict | None:
+        """The macro template pinned to a day, or None if the day follows the
+        weekly schedule."""
+        return self._food_rpc("getDailyMacroTargetTemplate",
+                              [("I", _USER_ID), (gwt_foods.DAY, diary.day_obj(day))])
+
+    def apply_macro_template(self, day: date, template: dict) -> None:
+        """Use a saved template for one day (the Daily Target Editor's
+        "Choose a Template" option): the template, with the day set, is sent
+        to updateDailyTargetTemplate."""
+        self.authenticate()
+        t = dict(template, day=diary.day_obj(day))
+        body = gwt_foods.encode_request(self.gwt_header, "updateDailyTargetTemplate", [
+            (gwt_foods.STRING, self.nonce), ("I", int(self.user_id)),
+            (gwt_foods.MACRO_TARGET_TEMPLATE, t),
+        ])
+        raw = self._gwt_post(body)
+        # Success: //OK[1,2,1,["...ResponseEvent...","Success"],0,7]
+        if "Success" not in raw:
+            raise RuntimeError(f"updateDailyTargetTemplate failed: {raw[:300]}")
 
 
 def copy_for_new(food: dict) -> dict:

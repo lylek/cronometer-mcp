@@ -10,6 +10,8 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
+from . import nutrients as _nutrients
+from . import targets as _tg
 from .client import CronometerClient, FoodInUseError
 from .markdown import generate_food_log_md
 
@@ -608,7 +610,11 @@ def get_macro_targets(
 
     Returns the effective macro targets (protein, fat, carbs, calories)
     and the template name for a specific date or all days of the week.
-    A macro with no target set in Cronometer is null.
+    A macro with no target set in Cronometer is null. For a date, "source"
+    says where the targets come from: "day" (set for that day in the Daily
+    Target Editor), "weekly_schedule", or "none" (no template applies).
+    Templates in ratio mode give protein/fat/carbs as percent of energy,
+    not grams; list_macro_templates shows each template's units.
 
     Args:
         target_date: Date as YYYY-MM-DD to get targets for (defaults to today).
@@ -1424,6 +1430,246 @@ def get_energy_expenditure(start_date: str | None = None, end_date: str | None =
     try:
         res = _get_client().get_energy_expenditure(_parse_date(start_date), _parse_date(end_date))
         return json.dumps({"status": "success", **res}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+# --- Targets + Profile ---------------------------------------------------------
+
+_KEEP = object()
+
+
+def _amount(v):
+    """A tool amount argument: None keeps the current value, "none" clears it."""
+    if v is None:
+        return _KEEP
+    if isinstance(v, str):
+        if v.strip().lower() in ("none", "null", ""):
+            return None
+        return float(v)
+    return float(v)
+
+
+def _pref_num(v: float) -> str:
+    """A number as the web client writes it into a preference ("181", "0.375")."""
+    v = float(v)
+    return str(int(v)) if v.is_integer() else repr(v)
+
+
+@_tool
+def get_nutrient_targets(nutrients: list[str] | None = None, visible_only: bool = False) -> str:
+    """Nutrient targets from Targets + Profile (min = Daily Target, max = Maximum).
+
+    Each row: nutrient_id, nutrient name, unit, min, max, visible, and custom
+    (false = Cronometer's default for your profile; true = your own values).
+    Energy (208) is computed from the energy settings, see get_profile.
+
+    Args:
+        nutrients: Only these nutrients, by name ("Vitamin D", "sodium") or id.
+            Omit for all targets.
+        visible_only: Only the nutrients shown in the Diary.
+    """
+    try:
+        rows = [_tg.summarize_target(t) for t in _get_client().get_nutrient_targets()]
+        if nutrients:
+            have = {r["nutrient_id"] for r in rows}
+            want = {_nutrients.resolve(n, prefer=have) for n in nutrients}
+            rows = [r for r in rows if r["nutrient_id"] in want]
+        if visible_only:
+            rows = [r for r in rows if r["visible"]]
+        return json.dumps({"status": "success", "count": len(rows), "targets": rows},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def set_nutrient_target(
+    nutrient: str,
+    min_amount: float | str | None = None,
+    max_amount: float | str | None = None,
+    visible: bool | None = None,
+    use_default: bool = False,
+) -> str:
+    """Edit one nutrient target, like the Edit Target dialog on Targets + Profile.
+
+    Setting min_amount or max_amount makes the target custom; the other bound
+    keeps its current value. use_default=True switches back to Cronometer's
+    default for your profile. Amounts are in the nutrient's unit (see
+    get_nutrient_targets).
+
+    Args:
+        nutrient: Name ("Sodium", "B12") or nutrient id. Where a name is
+            ambiguous, the id that already has a target is used.
+        min_amount: Daily target; "none" removes it.
+        max_amount: Maximum threshold; "none" removes it.
+        visible: Show or hide the nutrient in the Diary.
+        use_default: Go back to the default target (no min/max with this).
+    """
+    try:
+        client = _get_client()
+        rows = {t["id"]: t for t in client.get_nutrient_targets()}
+        nid = _nutrients.resolve(nutrient, prefer=set(rows))
+        cur = rows.get(nid, {"id": nid, "min": None, "max": None, "vis": False, "custom": False})
+        new_min, new_max = _amount(min_amount), _amount(max_amount)
+        bounds = new_min is not _KEEP or new_max is not _KEEP
+        if use_default and bounds:
+            raise ValueError("use_default can't be combined with min_amount/max_amount")
+        lo = cur.get("min") if new_min is _KEEP else new_min
+        hi = cur.get("max") if new_max is _KEEP else new_max
+        if lo is not None and hi is not None and lo > hi:
+            raise ValueError(f"min_amount {lo} is above max_amount {hi}")
+        custom = False if use_default else (True if bounds else bool(cur.get("custom")))
+        vis = bool(cur.get("vis")) if visible is None else visible
+        before = _tg.summarize_target(cur)
+        if (lo, hi, vis, custom) == (cur.get("min"), cur.get("max"), bool(cur.get("vis")),
+                                     bool(cur.get("custom"))):
+            return json.dumps({"status": "success", "message": "No change.", "target": before},
+                              indent=2, ensure_ascii=False)
+        client.set_nutrient_target(_tg.target_obj(nid, lo, hi, vis, custom))
+        if use_default:
+            client.init_targets()  # recompute the default min/max
+        after = next((_tg.summarize_target(t) for t in client.get_nutrient_targets()
+                      if t["id"] == nid), None)
+        return json.dumps({"status": "success", "previous": before, "updated": after},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
+def get_profile() -> str:
+    """Profile and energy settings from Targets + Profile.
+
+    Sex, birthday, age, pregnancy/lactation status, height, current weight and
+    body fat (latest logged), and the energy settings: BMR (custom or
+    Mifflin-St Jeor), activity level and its baseline kcal, thermic effect of
+    food, tracker activity, and any custom energy target.
+    """
+    try:
+        user = _get_client().get_user()
+        return json.dumps({"status": "success", "profile": _tg.profile_summary(user)},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def update_profile(
+    sex: str | None = None,
+    birthday: str | None = None,
+    reproductive_status: str | None = None,
+    height_cm: float | None = None,
+    bmr: float | str | None = None,
+    activity_level: str | None = None,
+    custom_activity_kcal: float | None = None,
+    thermic_effect_of_food: bool | None = None,
+    custom_energy_target: float | str | None = None,
+) -> str:
+    """Change profile and energy settings on Targets + Profile. Only the
+    arguments given change. Default nutrient targets are recomputed after a
+    change to sex, birthday, pregnancy status or height, as the website does.
+
+    Weight and body fat are biometrics: log them with add_biometric.
+
+    Args:
+        sex: "Male" or "Female".
+        birthday: YYYY-MM-DD.
+        reproductive_status: "Normal", "Pregnant" or "Lactating" (Female only).
+        height_cm: Height in centimeters.
+        bmr: A custom BMR in kcal, or "default" for Mifflin-St Jeor.
+        activity_level: Baseline activity: "None", "Sedentary",
+            "Lightly Active", "Moderately Active" or "Very Active".
+        custom_activity_kcal: A custom baseline activity in kcal/day instead
+            of a level.
+        thermic_effect_of_food: Count TEF in energy burned.
+        custom_energy_target: A fixed daily energy target in kcal (turns off
+            the weight-goal target and the "include exercise" option), or
+            "off" to go back to the weight-goal target.
+    """
+    try:
+        client = _get_client()
+        user = client.get_user()
+        before = _tg.profile_summary(user)
+        if activity_level is not None and custom_activity_kcal is not None:
+            raise ValueError("give activity_level or custom_activity_kcal, not both")
+
+        prefs: list[tuple[str, str | None]] = []
+        if height_cm is not None:
+            if not 50 <= height_cm <= 275:
+                raise ValueError(f"height_cm {height_cm} is out of range")
+            prefs.append((_tg.HEIGHT_CM, _pref_num(height_cm)))
+        if bmr is not None:
+            if isinstance(bmr, str) and bmr.strip().lower() == "default":
+                prefs.append((_tg.BMR, None))
+            else:
+                prefs.append((_tg.BMR, _pref_num(round(float(bmr)))))
+        if activity_level is not None:
+            prefs += [(_tg.ACTIVITY, _pref_num(_tg.resolve_activity(activity_level))),
+                      (_tg.ACTIVITY_CUSTOM, "0")]
+        if custom_activity_kcal is not None:
+            prefs += [(_tg.ACTIVITY, _pref_num(_tg.CUSTOM_ACTIVITY)),
+                      (_tg.ACTIVITY_CUSTOM, _pref_num(custom_activity_kcal))]
+        if thermic_effect_of_food is not None:
+            prefs.append((_tg.TEF, "true" if thermic_effect_of_food else "false"))
+        if custom_energy_target is not None:
+            if isinstance(custom_energy_target, str) and custom_energy_target.strip().lower() == "off":
+                prefs += [(_tg.INCLUDE_EXERCISE, "true"), (_tg.CUSTOM_ENERGY, None),
+                          (_tg.CUSTOM_ENERGY_MAX, None)]
+            else:
+                kcal = _pref_num(float(custom_energy_target))
+                prefs += [(_tg.INCLUDE_EXERCISE, "false"), (_tg.CUSTOM_ENERGY, kcal),
+                          (_tg.CUSTOM_ENERGY_MAX, kcal)]
+
+        rest_change = any(v is not None for v in (sex, birthday, reproductive_status))
+        if rest_change:
+            new_sex = _tg.resolve_sex(sex) if sex else before["sex"]
+            status = (_tg.resolve_reproductive_status(reproductive_status)
+                      if reproductive_status else before["reproductive_status"] or "Normal")
+            if new_sex == "Male" and status != "Normal":
+                if reproductive_status:
+                    raise ValueError("reproductive_status other than Normal needs sex Female")
+                status = "Normal"
+            bday = date.fromisoformat(birthday) if birthday else date.fromisoformat(before["birthday"])
+            client.update_profile(bday, new_sex, status)
+        for key, value in prefs:
+            client.set_preference(key, value)
+        if rest_change or height_cm is not None:
+            client.init_targets()
+        if not rest_change and not prefs:
+            return json.dumps({"status": "success", "message": "Nothing to change.",
+                               "profile": before}, indent=2, ensure_ascii=False)
+        after = _tg.profile_summary(client.get_user())
+        return json.dumps({"status": "success", "previous": before, "updated": after},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def apply_macro_template(template_name: str, target_date: str | None = None) -> str:
+    """Use a saved macro template for one day (the Daily Target Editor's
+    "Choose a Template for today"). Only that day changes; the weekly
+    schedule is untouched. For one-off custom macros use set_macro_targets.
+
+    Args:
+        template_name: A saved template's name (see list_macro_templates).
+        target_date: YYYY-MM-DD (defaults to today).
+    """
+    try:
+        client = _get_client()
+        day = _parse_date(target_date) or date.today()
+        templates = client.get_macro_templates_raw()
+        match = [t for t in templates if (t.get("name") or "").lower() == template_name.lower()]
+        if not match:
+            names = [t.get("name") for t in templates]
+            raise ValueError(f"no template named {template_name!r}; have {names}")
+        before = client.get_daily_macro_targets(day)
+        client.apply_macro_template(day, match[0])
+        after = client.get_daily_macro_targets(day)
+        return json.dumps({"status": "success", "date": str(day),
+                           "template": _tg.template_summary(match[0]),
+                           "previous": before, "updated": after}, indent=2)
     except Exception as e:
         return _error(e)
 

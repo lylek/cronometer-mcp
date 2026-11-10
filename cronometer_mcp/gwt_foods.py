@@ -89,6 +89,11 @@ DAY_AND_TIME = _E + "DayAndTime/1495394183"
 SLEEP_SUMMARY = "com.cronometer.shared.sleep.SleepSummary/1875351125"
 GENDER = _U + "Gender/2456086264"
 REPRODUCTIVE_STATUS = _U + "ReproductiveStatus/1664778317"
+BOOLEAN = "java.lang.Boolean/476441737"
+DOUBLE = "java.lang.Double/858496421"
+_T = "com.cronometer.shared.targets.models."
+TARGET = _T + "Target/3515640666"
+MACRO_TARGET_TEMPLATE = _T + "MacroTargetTemplate/3691130822"
 
 ENUMS = {
     GENDER: ["Male", "Female", "Other"],
@@ -421,13 +426,43 @@ LAYOUTS.update({
 })
 LAYOUTS[BODY_FAT_HISTORY] = LAYOUTS[BIOMETRIC_HISTORY]
 
+LAYOUTS.update({
+    # A nutrient target. min and max are boxed Doubles (null = no target).
+    # custom=False means Cronometer's DRI default for the profile.
+    TARGET: [
+        ("custom", "bool"),
+        ("max", "obj"),
+        ("min", "obj"),
+        ("nutrient_id", "int"),
+        ("visible", "bool"),
+    ],
+    # Saved macro templates and per-day targets. In ratio mode (macro_mode 6)
+    # protein/carbs/fat are percentages of energy; otherwise grams.
+    MACRO_TARGET_TEMPLATE: [
+        ("unknown_0", "obj"),
+        ("carbs", "obj"),
+        ("unknown_2", "obj"),
+        ("day", "obj"),
+        ("calories", "obj"),
+        ("fat", "obj"),
+        ("unknown_6", "obj"),
+        ("unknown_7", "bool"),
+        ("id", "obj"),
+        ("unknown_9", "str"),
+        ("macro_mode", "int"),
+        ("name", "str"),
+        ("protein", "obj"),
+        ("unknown_13", "obj"),
+    ],
+})
+
 # A Measure subclass with no extra serialized fields (seen on some CRDB foods).
 LAYOUTS[DERIVED_MEASURE] = LAYOUTS[MEASURE]
 
 _COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY, LINKED_LIST, UNIT_ARRAY}
 _MAPS = {HASH_MAP, USER_PREFERENCES}
 # Values serialized as a single token: boxed numbers, and java.sql dates as a long.
-_BOXED = {INTEGER, "java.lang.Double/858496421", "java.lang.Long/4227064769",
+_BOXED = {INTEGER, DOUBLE, "java.lang.Long/4227064769",
           "java.lang.Short/551743396", SQL_DATE}
 
 
@@ -513,7 +548,7 @@ class _Decoder:
             return self.string()
         if sig in _BOXED:
             return self.next()
-        if sig == "java.lang.Boolean/476441737":
+        if sig == BOOLEAN:
             return bool(self.next())
         if sig in ENUMS:
             return GwtEnum(sig, self.next())
@@ -656,12 +691,22 @@ class _Encoder:
             self.emit(self.sref(STRING))
             self.emit(self.sref(v))
             return
+        # Boxed values in object fields: bool -> Boolean, int -> Integer,
+        # float -> Double. Each takes an object slot but is never shared.
         if isinstance(v, bool):
-            raise TypeError("write booleans through a typed field")
+            self.seen[("box", object())] = len(self.seen) + 1
+            self.emit(self.sref(BOOLEAN))
+            self.emit(1 if v else 0)
+            return
         if isinstance(v, int):
-            self.seen[("int", object())] = len(self.seen) + 1  # boxed: never shared
+            self.seen[("box", object())] = len(self.seen) + 1
             self.emit(self.sref(INTEGER))
             self.emit(v)
+            return
+        if isinstance(v, float):
+            self.seen[("box", object())] = len(self.seen) + 1
+            self.emit(self.sref(DOUBLE))
+            self.emit(_fmt_double(v))
             return
         if self._backref(("obj", id(v))):
             return
