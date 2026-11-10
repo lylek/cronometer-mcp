@@ -339,3 +339,94 @@ def test_apply_macro_template_tool(client):
     assert day == date(2026, 11, 10) and template["id"] == 137024
     out = json.loads(server.apply_macro_template("Rest Day"))
     assert out["status"] == "error" and "Light Training Day" in out["message"]
+
+
+# --- weight goal ----------------------------------------------------------------
+
+WEIGHT = 66.37910687200001  # 146.34 lb
+
+
+def _goal_user(**settings):
+    return user(weights=[(date(2026, 11, 5), WEIGHT)], settings=settings)
+
+
+def test_rate_kcal_matches_website():
+    # Energy targets the website showed at 1829 kcal maintenance.
+    assert [1829 + tg.rate_kcal(-r) for r in (0.25, 0.5, 0.75, 2)] == [1704, 1580, 1455, 831]
+    assert tg.rate_kcal(0.5) == 249
+
+
+def test_weight_goal_summary_maintain():
+    w = tg.weight_goal_summary(_goal_user(weightGoal="0"), date(2026, 11, 10))
+    assert (w["goal"], w["energy_target_kcal"], w["forecast_date"]) == ("Maintain Weight", 1829, None)
+    assert w["goal_weight_lb"] == w["current_weight_lb"] == 146.34
+    assert w["in_effect"] and w["replaced_by"] is None
+
+
+def test_weight_goal_summary_matches_website_forecast():
+    u = _goal_user(weightGoal="-0.25", wgkg="63.5029")
+    w = tg.weight_goal_summary(u, date(2026, 11, 10))
+    assert (w["goal"], w["goal_weight_lb"], w["rate_kg_per_week"]) == ("Lose Weight", 140.0, -0.113)
+    assert (w["energy_target_kcal"], w["forecast_date"]) == (1704, "2027-05-07")
+    u = _goal_user(weightGoal="-2", wgkg="63.5029")
+    assert tg.weight_goal_summary(u, date(2026, 11, 10))["forecast_date"] == "2026-12-02"
+
+
+def test_weight_goal_replaced_by_custom_energy_or_guided_plan():
+    w = tg.weight_goal_summary(_goal_user(**{"targets.custom.energy.target": "2500"}))
+    assert (w["in_effect"], w["replaced_by"]) == (False, "custom energy target")
+    w = tg.weight_goal_summary(_goal_user(**{"active.weight.goal": "{}"}))
+    assert w["replaced_by"] == "Guided Goal Plan"
+
+
+def test_resolve_goal():
+    lose = 140 * tg.LB_KG
+    assert tg.resolve_goal(WEIGHT, lose, 0.25, 0) == (-0.25, round(lose, 4))
+    assert tg.resolve_goal(WEIGHT, 70, None, -0.5) == (0.5, 70)  # keeps pace, flips direction
+    assert tg.resolve_goal(WEIGHT, WEIGHT + 0.001, 1, 0) == (0.0, None)
+    for rate, current in ((None, 0), (0, 0), (-1, 0), (2.5, 0)):
+        with pytest.raises(ValueError):
+            tg.resolve_goal(WEIGHT, lose, rate, current)
+
+
+def test_set_weight_goal_writes_rate_and_goal(client):
+    client.get_user.return_value = _goal_user(weightGoal="0")
+    out = json.loads(server.set_weight_goal(goal_weight=140, rate_per_week=0.25))
+    assert out["status"] == "success"
+    assert _prefs(client) == [("weightGoal", "-0.25"), ("wgkg", "63.5029")]
+
+
+def test_set_weight_goal_kg_and_rate_only(client):
+    client.get_user.return_value = _goal_user(weightGoal="-0.25", wgkg="63.5029")
+    server.set_weight_goal(rate_per_week=0.5)
+    assert _prefs(client) == [("weightGoal", "-0.5"), ("wgkg", "63.5029")]
+    client.set_preference.reset_mock()
+    server.set_weight_goal(goal_weight=70, rate_per_week=0.5, units="kg")
+    assert _prefs(client) == [("weightGoal", "1.102"), ("wgkg", "70")]
+
+
+def test_set_weight_goal_maintain_and_no_change(client):
+    client.get_user.return_value = _goal_user(weightGoal="-0.25", wgkg="63.5029")
+    server.set_weight_goal(maintain=True)
+    assert _prefs(client) == [("weightGoal", "0"), ("wgkg", None)]
+    client.set_preference.reset_mock()
+    client.get_user.return_value = _goal_user(weightGoal="0")
+    out = json.loads(server.set_weight_goal(maintain=True))
+    assert out["message"] == "Nothing to change."
+    client.set_preference.assert_not_called()
+
+
+@pytest.mark.parametrize("settings,kw", [
+    ({"targets.custom.energy.target": "2500"}, dict(goal_weight=140, rate_per_week=0.5)),
+    ({"active.weight.goal": "{}"}, dict(maintain=True)),
+    ({"weightGoal": "0"}, dict(goal_weight=140)),            # no rate to keep
+    ({"weightGoal": "0"}, dict(rate_per_week=0.5)),          # no goal weight
+    ({"weightGoal": "0"}, dict(goal_weight=140, rate_per_week=3)),
+    ({"weightGoal": "0"}, dict(goal_weight=140, units="stone")),
+    ({"weightGoal": "0"}, dict(maintain=True, goal_weight=140)),
+    ({"weightGoal": "0"}, dict()),
+])
+def test_set_weight_goal_rejects(client, settings, kw):
+    client.get_user.return_value = _goal_user(**settings)
+    assert json.loads(server.set_weight_goal(**kw))["status"] == "error"
+    client.set_preference.assert_not_called()

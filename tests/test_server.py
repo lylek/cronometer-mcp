@@ -22,7 +22,7 @@ WRITE_TOOLS = {
     "add_repeat_item", "delete_repeat_item",
     "create_custom_recipe", "edit_custom_recipe", "edit_custom_food",
     "copy_custom_food", "delete_custom_food",
-    "set_nutrient_target", "update_profile", "apply_macro_template",
+    "set_nutrient_target", "update_profile", "apply_macro_template", "set_weight_goal",
 }
 
 
@@ -42,13 +42,13 @@ class TestReadOnlyMode:
     def test_default_registers_write_tools(self):
         names = _tool_names({"CRONOMETER_READ_ONLY": ""})
         assert WRITE_TOOLS <= names
-        assert len(names) == 42
+        assert len(names) == 43
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
     def test_read_only_drops_every_write_tool(self, value):
         names = _tool_names({"CRONOMETER_READ_ONLY": value})
         assert not names & WRITE_TOOLS
-        assert len(names) == 42 - len(WRITE_TOOLS)
+        assert len(names) == 43 - len(WRITE_TOOLS)
         assert {"get_food_log", "search_foods", "get_macro_targets",
                 "sync_cronometer"} <= names
 
