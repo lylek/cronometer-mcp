@@ -16,13 +16,14 @@ import logging
 import os
 import pickle
 import re
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
 from requests.cookies import CookieConflictError
 
 from . import custom_foods as cf
+from . import diary
 from . import gwt_foods
 
 logger = logging.getLogger(__name__)
@@ -2980,6 +2981,91 @@ class CronometerClient:
             raise FoodInUseError(food_id, usage)
         self._food_rpc("deleteFood", [("I", int(food_id))])
         return {"food_source_id": food_id, "name": cf.food_name(food), "usage": usage}
+
+    # ── Diary days: exercises, biometrics, energy expenditure ────────────
+
+    MAX_DIARY_DAYS = 62
+
+    def get_user(self) -> dict:
+        """The logged-in User (profile, settings, weight history), decoded.
+
+        Re-issues authenticate(), which is what the web app does on every
+        page load; it is the only call that returns the profile.
+        """
+        self.authenticate()
+        body = GWT_AUTHENTICATE.replace("{gwt_header}", self.gwt_header)
+        raw = self._gwt_post(body)
+        new_nonce = self._cookie_value("sesnonce")  # this call rotates the nonce
+        if new_nonce:
+            self.nonce = new_nonce
+        self._diary_groups = self._parse_diary_groups(raw) or self._diary_groups
+        return gwt_foods.decode_response(raw)
+
+    def get_day_info(self, day: date) -> dict:
+        """Everything logged on one day (getDayInfo), as decoded GWT dicts."""
+        return self._food_rpc("getDayInfo", [(gwt_foods.DAY, diary.day_obj(day)), ("I", _USER_ID)])
+
+    def _days(self, start: date | None, end: date | None) -> list[date]:
+        start = start or date.today()
+        end = end or start
+        if end < start:
+            raise ValueError("end date is before start date")
+        n = (end - start).days + 1
+        if n > self.MAX_DIARY_DAYS:
+            raise ValueError(f"date range too long ({n} days; max {self.MAX_DIARY_DAYS})")
+        return [start + timedelta(days=i) for i in range(n)]
+
+    def _group_names(self) -> dict[int, str]:
+        return {grp["wire_index"]: grp["name"] for grp in self.diary_groups}
+
+    def get_exercises(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """Exercise entries (workouts, manual entries and tracker activity)."""
+        out = []
+        for d in self._days(start, end):
+            info = self.get_day_info(d)
+            groups = self._group_names()
+            out += [diary.summarize_exercise(e, groups) for e in diary.entries(info, "Exercise")]
+        return out
+
+    def get_metrics(self) -> dict[int, dict]:
+        """Biometric metric catalog: id -> {name, units: [(unit_id, name, factor)]}."""
+        if getattr(self, "_metrics", None) is None:
+            res = self._food_rpc("getMetrics", [("I", _USER_ID)])
+            self._metrics = {
+                m["id"]: {"name": m["name"],
+                          "units": [(u["id"], u["name"], u["factor"]) for u in cf.items(m["units"])]}
+                for m in cf.items(res)
+            }
+        return self._metrics
+
+    def get_daily_biometrics(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """Biometric entries per day, including tracker imports (sleep, HRV...)."""
+        metrics = self.get_metrics()
+        out = []
+        for d in self._days(start, end):
+            info = self.get_day_info(d)
+            for e in diary.entries(info):
+                if gwt_foods.short_class(e) not in ("Biometric", "SleepBiometric"):
+                    continue
+                out.append(diary.summarize_biometric(e, metrics))
+        return out
+
+    def get_energy_expenditure(self, start: date | None = None, end: date | None = None) -> dict:
+        """The Diary page's Energy Expenditure breakdown, per day."""
+        days = self._days(start, end)
+        user = self.get_user()
+        foods: dict[int, dict] = {}
+        out = []
+        for d in days:
+            info = self.get_day_info(d)
+            day_entries = diary.entries(info)
+            need = {e["food_id"] for e in day_entries
+                    if gwt_foods.short_class(e) == "Serving" and e["food_id"] not in foods}
+            if need:
+                foods.update(self.get_foods_raw(sorted(need)))
+            totals = diary.day_totals(day_entries, foods)
+            out.append(diary.energy_expenditure(totals, user, d))
+        return {"profile": diary.profile(user, days[-1]), "days": out}
 
 
 def copy_for_new(food: dict) -> dict:

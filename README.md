@@ -14,6 +14,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 - **Diary management** — add/remove food entries, copy entire days, mark days complete
 - **Recurring foods** — create, list, and delete repeat items that auto-log on selected days
 - **Custom foods, recipes and meals** — list, inspect (with nested recipes), create, edit, copy and delete
+- **Exercise, biometrics and energy expenditure** — exercises (tracker activity vs workouts), daily biometrics incl. Garmin sleep/HRV, and the Diary page's BMR / baseline / tracker / exercise / TEF breakdown, read without using CSV export quota
 - **Macro targets** — read/write daily targets, create templates, set weekly schedules
 - **Fasting** — view history and stats, cancel or delete fasts
 - **Biometrics** — log and remove weight, blood glucose, heart rate, body fat
@@ -190,6 +191,18 @@ meal) returns `"status": "needs_decision"` and changes nothing. Call again with
 `update_past_entries=true` to change it in place, past entries included, or
 `false` to save the edit as a new copy, matching Cronometer's "Update old
 entries?" prompt.
+
+### Exercise, Biometrics & Energy Expenditure
+
+| Tool | Description |
+|------|-------------|
+| `get_exercise_log` | Exercise entries per day, each marked `tracker_activity` (e.g. Daily Activity (Garmin)) or `exercise` |
+| `get_daily_biometrics` | Biometrics per day, including tracker imports (sleep stages, HRV, Body Battery...) |
+| `get_energy_expenditure` | BMR, baseline and adjusted baseline activity, tracker activity, exercise and TEF per day, plus consumed and balance |
+
+These read the diary day by day (up to 62 days per call) rather than through
+CSV exports. Cronometer computes the energy breakdown in the browser; this
+server repeats that calculation from your profile, settings and diary.
 
 ### Recurring Foods (Repeat Items)
 

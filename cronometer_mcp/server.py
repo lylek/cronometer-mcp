@@ -1354,6 +1354,80 @@ def get_custom_food(food_source_id: int, depth: int = 1, all_nutrients: bool = F
         return _error(e)
 
 
+@_tool
+def get_exercise_log(start_date: str | None = None, end_date: str | None = None) -> str:
+    """List exercise entries, including those synced from fitness trackers.
+
+    Reads the diary directly, so it does not use up CSV export quota. Each
+    entry has its minutes, calories burned (positive), source ("Garmin",
+    "manual"...), any tracker metadata, and a kind:
+    - "tracker_activity": a tracker's all-day burn, e.g. "Daily Activity
+      (Garmin)". Cronometer counts it as Tracker Activity and subtracts it
+      from baseline activity.
+    - "exercise": workouts and manual entries (Cronometer's Exercise line).
+
+    Args:
+        start_date: First day, YYYY-MM-DD (defaults to today).
+        end_date: Last day, YYYY-MM-DD (defaults to start_date). At most 62 days.
+    """
+    try:
+        rows = _get_client().get_exercises(_parse_date(start_date), _parse_date(end_date))
+        return json.dumps({"status": "success", "count": len(rows), "exercises": rows},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
+def get_daily_biometrics(start_date: str | None = None, end_date: str | None = None) -> str:
+    """List biometric entries per day, including tracker imports.
+
+    Covers weight, heart rate, HRV, sleep (with stage breakdown), sleep
+    score, Body Battery, respiration rate and anything else logged. Values
+    are in the metric's base unit (kg, bpm, ms, hours...). Overnight
+    sampled metrics include sample statistics.
+
+    Args:
+        start_date: First day, YYYY-MM-DD (defaults to today).
+        end_date: Last day, YYYY-MM-DD (defaults to start_date). At most 62 days.
+    """
+    try:
+        rows = _get_client().get_daily_biometrics(_parse_date(start_date), _parse_date(end_date))
+        return json.dumps({"status": "success", "count": len(rows), "biometrics": rows},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
+def get_energy_expenditure(start_date: str | None = None, end_date: str | None = None) -> str:
+    """Daily Energy Expenditure breakdown, as on the web Diary page.
+
+    Cronometer computes this in the browser; this repeats its calculation:
+    - bmr: the profile's custom BMR, else Mifflin-St Jeor from sex, age,
+      height and the last weight logged on or before the day.
+    - baseline_activity: BMR x activity level (Sedentary 0.2 ... Very
+      Active 0.9). adjusted_baseline_activity scales it by
+      (960 - exercise minutes) / 960, then subtracts tracker activity
+      (floored at 0).
+    - tracker_activity: all-day tracker burn (e.g. Daily Activity (Garmin)).
+    - exercise: workouts and manual exercise entries.
+    - thermic_effect_of_food (if enabled): 25% of protein kcal, 7.5% of
+      net-carb kcal, 1.5% of fat kcal, 16% of alcohol kcal.
+    burned_kcal is their sum; balance_kcal = consumed - burned. The profile
+    inputs used are returned too.
+
+    Args:
+        start_date: First day, YYYY-MM-DD (defaults to today).
+        end_date: Last day, YYYY-MM-DD (defaults to start_date). At most 62 days.
+    """
+    try:
+        res = _get_client().get_energy_expenditure(_parse_date(start_date), _parse_date(end_date))
+        return json.dumps({"status": "success", **res}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
 @_write_tool
 def create_custom_recipe(
     name: str,
