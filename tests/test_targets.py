@@ -402,7 +402,7 @@ def test_set_weight_goal_kg_and_rate_only(client):
     assert _prefs(client) == [("weightGoal", "-0.5"), ("wgkg", "63.5029")]
     client.set_preference.reset_mock()
     server.set_weight_goal(goal_weight=70, rate_per_week=0.5, units="kg")
-    assert _prefs(client) == [("weightGoal", "1.102"), ("wgkg", "70")]
+    assert _prefs(client) == [("weightGoal", "1.10231"), ("wgkg", "70")]
 
 
 def test_set_weight_goal_maintain_and_no_change(client):
@@ -430,3 +430,128 @@ def test_set_weight_goal_rejects(client, settings, kw):
     client.get_user.return_value = _goal_user(**settings)
     assert json.loads(server.set_weight_goal(**kw))["status"] == "error"
     client.set_preference.assert_not_called()
+
+
+# --- goal-rate review -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("baseline,sex,rate,expect", [
+    (1819, "Male", -0.5, "SAFE"),               # what the website showed: tier 3
+    (1819, "Male", -0.75, "NOT_RECOMMENDED"),
+    (1600, "Male", -0.25, "NOT_RECOMMENDED"),   # tier 1: any loss
+    (2050, "Male", -1, "CAUTIOUS"),             # tier 5
+    (2050, "Male", -1.25, "NOT_RECOMMENDED"),
+    (2200, "Male", -1.25, "CAUTIOUS"),          # tier 6
+    (2200, "Male", -1.5, "NOT_RECOMMENDED"),
+    (1830, "Female", -1.25, "CAUTIOUS"),        # female thresholds are lower
+    (1300, "Female", 2, "SAFE"),                # gains are never reviewed
+])
+def test_rate_review(baseline, sex, rate, expect):
+    assert tg.rate_review(baseline, sex, rate) == expect
+
+
+def test_weight_goal_summary_reports_review():
+    w = tg.weight_goal_summary(_goal_user(weightGoal="-1", wgkg="60"), date(2026, 11, 10))
+    assert (w["rate_review"], w["low_rate_warning_acknowledged"]) == ("NOT_RECOMMENDED", False)
+
+
+def test_set_weight_goal_needs_acknowledgement_for_low_energy_rates(client):
+    client.get_user.return_value = _goal_user(weightGoal="0")
+    out = json.loads(server.set_weight_goal(goal_weight=140, rate_per_week=1))
+    assert out["status"] == "error" and "acknowledge_low_energy_warning" in out["message"]
+    client.set_preference.assert_not_called()
+    server.set_weight_goal(goal_weight=140, rate_per_week=1, acknowledge_low_energy_warning=True)
+    assert _prefs(client) == [("weightGoal", "-1"), ("wgkg", "63.5029"),
+                              ("weight.goal.aggressive.rate.ack", "true")]
+
+
+def test_set_weight_goal_kg_maximum_is_one_kg(client):
+    client.get_user.return_value = _goal_user(weightGoal="0")
+    out = json.loads(server.set_weight_goal(goal_weight=80, rate_per_week=1, units="kg"))
+    assert out["status"] == "success"
+    assert _prefs(client)[0] == ("weightGoal", "2.20462")
+    out = json.loads(server.set_weight_goal(goal_weight=80, rate_per_week=1.1, units="kg"))
+    assert out["status"] == "error"
+
+
+# --- macro settings -----------------------------------------------------------------
+
+MACRO_PREFS = {
+    "macroIndex": "0", "macroProtein": "16", "macroCarbs": "60", "macroLipids": "20",
+    "targets.fixed.protein": "135", "targets.fixed.protein.max": "135",
+    "targets.fixed.total.carbs": "300", "targets.fixed.total.carbs.max": "300",
+    "targets.fixed.net.carbs": "270", "targets.fixed.net.carbs.max": "270",
+    "targets.fixed.fats": "70", "targets.fixed.fats.max": "70",
+    "targets.macros.netcarbs": "false", "targets.macros.fiber": "false",
+    "targets.macros.sugaralcohol": "true", "targets.macros.allulose": "true",
+    "targets.macros.fructose": "true", "targets.include.exercises": "true",
+    "enable.macro.scheduler": "true",
+}
+
+
+def test_macro_settings_summary():
+    m = tg.macro_settings_summary(user(settings=MACRO_PREFS))
+    assert m["mode"] == "Fixed Targets"
+    assert m["ratios_percent"] == {"protein": 16.67, "carbs": 62.5, "fat": 20.83}
+    assert m["fixed_targets_g"] == {"protein": 135, "net_carbs": 270, "total_carbs": 300, "fat": 70}
+    assert (m["track_carbs_as"], m["net_carbs_subtract"]) == ("total", ["fiber"])
+    assert m["add_expenditure_above_baseline"] is True
+    assert m["applies_to"].startswith("days with no template")
+
+
+def test_macro_settings_defaults():
+    m = tg.macro_settings_summary(user(settings={}))
+    assert (m["mode"], m["track_carbs_as"], m["net_carbs_subtract"]) == (
+        "Fixed Targets", "net", ["fiber", "sugar_alcohols"])
+    assert m["applies_to"] == "every day"
+
+
+def test_update_macro_settings_ratios_mode(client):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    out = json.loads(server.update_macro_settings(mode="ratios", protein_percent=25,
+                                                  carbs_percent=50, fat_percent=25))
+    assert out["status"] == "success"
+    assert _prefs(client) == [("macroIndex", "6"), ("macroProtein", "25"),
+                              ("macroCarbs", "50"), ("macroLipids", "25")]
+
+
+def test_update_macro_settings_fixed_and_carb_tracking(client):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    server.update_macro_settings(protein_g=140, carbs_g=250, track_carbs_as="net",
+                                 net_carbs_subtract=["fiber", "sugar alcohols"])
+    assert _prefs(client) == [
+        ("targets.macros.netcarbs", "true"),
+        ("targets.fixed.protein", "140"), ("targets.fixed.protein.max", "140"),
+        ("targets.fixed.net.carbs", "250"), ("targets.fixed.net.carbs.max", "250"),
+        ("targets.macros.sugaralcohol", "false"),
+    ]
+
+
+def test_update_macro_settings_no_change(client):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    out = json.loads(server.update_macro_settings(mode="fixed", fat_g=70,
+                                                  net_carbs_subtract=["fiber"]))
+    assert out["message"] == "Nothing to change."
+    client.set_preference.assert_not_called()
+
+
+@pytest.mark.parametrize("kw", [
+    dict(mode="keto"),
+    dict(protein_percent=30, carbs_percent=40),
+    dict(protein_percent=30, carbs_percent=40, fat_percent=20),
+    dict(track_carbs_as="gross"),
+    dict(net_carbs_subtract=["starch"]),
+    dict(fat_g=-5),
+])
+def test_update_macro_settings_rejects(client, kw):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    assert json.loads(server.update_macro_settings(**kw))["status"] == "error"
+    client.set_preference.assert_not_called()
+
+
+def test_update_profile_add_expenditure_above_baseline(client):
+    client.get_user.return_value = user()
+    server.update_profile(custom_energy_target=2500, add_expenditure_above_baseline=True)
+    assert _prefs(client) == [("targets.custom.energy.target", "2500"),
+                              ("targets.custom.energy.target.max", "2500"),
+                              ("targets.include.exercises", "true")]

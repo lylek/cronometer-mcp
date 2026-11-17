@@ -11,6 +11,7 @@ from pathlib import Path
 from mcp.server.mcpserver import MCPServer
 
 from . import custom_foods as cf
+from . import diary as _diary
 from . import nutrients as _nutrients
 from . import targets as _tg
 from .client import _BIOMETRIC_TYPES, CronometerClient, FoodInUseError
@@ -1579,6 +1580,7 @@ def update_profile(
     custom_activity_kcal: float | None = None,
     thermic_effect_of_food: bool | None = None,
     custom_energy_target: float | str | None = None,
+    add_expenditure_above_baseline: bool | None = None,
 ) -> str:
     """Change profile and energy settings on Targets + Profile. Only the
     arguments given change. Default nutrient targets are recomputed after a
@@ -1598,8 +1600,10 @@ def update_profile(
             of a level.
         thermic_effect_of_food: Count TEF in energy burned.
         custom_energy_target: A fixed daily energy target in kcal (turns off
-            the weight-goal target and the "include exercise" option), or
+            the weight-goal target and add_expenditure_above_baseline), or
             "off" to go back to the weight-goal target.
+        add_expenditure_above_baseline: Add energy burned above baseline
+            activity (exercise, tracker activity) to the energy target.
     """
     try:
         client = _get_client()
@@ -1634,6 +1638,10 @@ def update_profile(
                 kcal = _pref_num(float(custom_energy_target))
                 prefs += [(_tg.INCLUDE_EXERCISE, "false"), (_tg.CUSTOM_ENERGY, kcal),
                           (_tg.CUSTOM_ENERGY_MAX, kcal)]
+        if add_expenditure_above_baseline is not None:
+            prefs = [kv for kv in prefs if kv[0] != _tg.INCLUDE_EXERCISE]
+            prefs.append((_tg.INCLUDE_EXERCISE,
+                          "true" if add_expenditure_above_baseline else "false"))
 
         rest_change = any(v is not None for v in (sex, birthday, reproductive_status))
         if rest_change:
@@ -1660,23 +1668,142 @@ def update_profile(
         return _error(e)
 
 
+@_tool
+def get_macro_settings() -> str:
+    """Default macro targets from Macro & Energy Targets on Targets + Profile.
+
+    These apply on days with no macro template (from the Daily Target Editor
+    or the weekly schedule; see get_macro_targets). Returns the mode (Fixed
+    Targets, Ratios or Keto Calculator), the ratio percentages, the fixed
+    gram amounts (net and total carbs are kept separately; the one matching
+    track_carbs_as is used), whether carbs are tracked as net or total, which
+    nutrients are subtracted from total carbs to give net carbs, and whether
+    energy burned above baseline activity is added to the energy target.
+    """
+    try:
+        user = _get_client().get_user()
+        return json.dumps({"status": "success",
+                           "macro_settings": _tg.macro_settings_summary(user)},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def update_macro_settings(
+    mode: str | None = None,
+    protein_percent: float | None = None,
+    carbs_percent: float | None = None,
+    fat_percent: float | None = None,
+    protein_g: float | None = None,
+    carbs_g: float | None = None,
+    fat_g: float | None = None,
+    track_carbs_as: str | None = None,
+    net_carbs_subtract: list[str] | None = None,
+) -> str:
+    """Change the default macro targets in Macro & Energy Targets on
+    Targets + Profile. Only the arguments given change. These apply on days
+    with no macro template; to change one day use set_macro_targets or
+    apply_macro_template.
+
+    Args:
+        mode: "ratios" or "fixed" (Fixed Targets). The Keto Calculator isn't
+            supported.
+        protein_percent, carbs_percent, fat_percent: Ratios, as percent of
+            energy. Give all three; they must add up to 100.
+        protein_g, carbs_g, fat_g: Fixed Targets in grams. carbs_g sets net
+            or total carbs, whichever is tracked (after track_carbs_as).
+        track_carbs_as: "net" or "total". Net and total carbs keep separate
+            fixed amounts, so switching uses the other stored amount unless
+            carbs_g is given too.
+        net_carbs_subtract: Which of "fiber", "sugar_alcohols", "allulose"
+            and "fructose" to subtract from total carbs to give net carbs
+            (the full list; [] subtracts none).
+    """
+    try:
+        client = _get_client()
+        user = client.get_user()
+        before = _tg.macro_settings_summary(user)
+        settings = _diary.settings(user)
+        prefs: list[tuple[str, str]] = []
+
+        if mode is not None:
+            want = {"ratios": 6, "ratio": 6, "fixed": 0, "fixed targets": 0}.get(mode.strip().lower())
+            if want is None:
+                raise ValueError(f"mode must be 'ratios' or 'fixed', not {mode!r}")
+            prefs.append((_tg.MACRO_MODE, str(want)))
+
+        ratios = (protein_percent, carbs_percent, fat_percent)
+        if any(v is not None for v in ratios):
+            if any(v is None for v in ratios):
+                raise ValueError("give protein_percent, carbs_percent and fat_percent together")
+            if any(v < 0 for v in ratios) or abs(sum(ratios) - 100) > 0.1:
+                raise ValueError(f"ratios must be positive and add up to 100, not {sum(ratios):g}")
+            for key, v in zip(_tg.RATIO_KEYS.values(), ratios):
+                prefs.append((key, _pref_num(v)))
+
+        net = before["track_carbs_as"] == "net"
+        if track_carbs_as is not None:
+            t = track_carbs_as.strip().lower()
+            if t not in ("net", "total"):
+                raise ValueError(f"track_carbs_as must be 'net' or 'total', not {track_carbs_as!r}")
+            net = t == "net"
+            prefs.append((_tg.NET_CARBS, "true" if net else "false"))
+
+        carbs_key = _tg.FIXED_KEYS["net_carbs" if net else "total_carbs"]
+        for key, v in ((_tg.FIXED_KEYS["protein"], protein_g), (carbs_key, carbs_g),
+                       (_tg.FIXED_KEYS["fat"], fat_g)):
+            if v is not None:
+                if not 0 <= v <= 2000:
+                    raise ValueError(f"{v:g} g is out of range")
+                prefs += [(key, _pref_num(v)), (key + ".max", _pref_num(v))]
+
+        if net_carbs_subtract is not None:
+            names = {n.strip().lower().replace(" ", "_") for n in net_carbs_subtract}
+            unknown = names - set(_tg.NET_CARB_EXCLUSIONS)
+            if unknown:
+                raise ValueError(f"unknown nutrients {sorted(unknown)}; use "
+                                 f"{list(_tg.NET_CARB_EXCLUSIONS)}")
+            for name, (key, _) in _tg.NET_CARB_EXCLUSIONS.items():
+                prefs.append((key, "false" if name in names else "true"))
+
+        changes = [(k, v) for k, v in prefs if settings.get(k) != v]
+        if not changes:
+            return json.dumps({"status": "success", "message": "Nothing to change.",
+                               "macro_settings": before}, indent=2, ensure_ascii=False)
+        for key, value in changes:
+            client.set_preference(key, value)
+        after = _tg.macro_settings_summary(client.get_user())
+        return json.dumps({"status": "success", "previous": before, "updated": after},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
 @_write_tool
 def set_weight_goal(
     goal_weight: float | None = None,
     rate_per_week: float | None = None,
     units: str = "lb",
     maintain: bool = False,
+    acknowledge_low_energy_warning: bool = False,
 ) -> str:
     """Set the weight goal on Targets + Profile (the website's "Fixed Goal
     Plan"), which sets the energy target: BMR + baseline activity + about
     500 kcal/day per lb/week to gain (minus to lose).
 
     The goal weight decides whether you lose or gain; rate_per_week is the
-    pace. Cronometer allows up to 2 lb (0.91 kg) a week; its website offers
-    0.25 lb steps and asks you to acknowledge a warning for faster rates that
-    would leave a low energy target. The weight goal has no effect while a
+    pace, up to 2 lb or 1 kg a week. (The website offers steps of 0.25 lb or
+    0.125 kg, but any rate works.) The weight goal has no effect while a
     custom energy target is set (turn it off with
     update_profile(custom_energy_target="off")).
+
+    The website reviews weight-loss rates against your baseline expenditure
+    (BMR + baseline activity): a rate it rates NOT_RECOMMENDED, which would
+    leave a low energy target, is refused unless
+    acknowledge_low_energy_warning is true, which is then recorded as on the
+    website. CAUTIOUS rates are saved with a note. The result's rate_review
+    gives the rating.
 
     Args:
         goal_weight: The goal weight, in `units`.
@@ -1684,13 +1811,15 @@ def set_weight_goal(
             per week. Omit to keep the current rate.
         units: "lb" or "kg", for both goal_weight and rate_per_week.
         maintain: Maintain the current weight (clears the goal weight and rate).
+        acknowledge_low_energy_warning: Confirm a weight-loss rate the website
+            would warn is not recommended for your energy needs.
     """
     try:
         unit = units.strip().lower().rstrip("s")
         if unit in ("lb", "pound"):
-            to_kg = _tg.LB_KG
+            to_kg, rate_to_lb, max_lb = _tg.LB_KG, 1.0, _tg.MAX_RATE_LB
         elif unit in ("kg", "kilogram"):
-            to_kg = 1.0
+            to_kg, rate_to_lb, max_lb = 1.0, _tg.LB_PER_KG, _tg.MAX_RATE_KG * _tg.LB_PER_KG
         else:
             raise ValueError(f"units must be 'lb' or 'kg', not {units!r}")
         if maintain and (goal_weight is not None or rate_per_week is not None):
@@ -1717,8 +1846,16 @@ def set_weight_goal(
                 raise ValueError("no goal weight is set; give goal_weight too")
             if not 20 <= goal <= 400:
                 raise ValueError(f"goal weight {goal_weight} {units} is out of range")
-            rate_lb = None if rate_per_week is None else rate_per_week * to_kg / _tg.LB_KG
-            rate, goal_kg = _tg.resolve_goal(current, goal, rate_lb, before["rate_lb_per_week"])
+            rate_lb = None if rate_per_week is None else rate_per_week * rate_to_lb
+            rate, goal_kg = _tg.resolve_goal(current, goal, rate_lb, before["rate_lb_per_week"],
+                                             max_lb)
+        review = _tg.review_rate(user, rate)
+        if review == "NOT_RECOMMENDED" and not acknowledge_low_energy_warning:
+            raise ValueError(
+                f"losing {-rate:g} lb/week would leave an energy target of "
+                f"{_tg.baseline_expenditure(user) + _tg.rate_kcal(rate)} kcal, which Cronometer "
+                "warns is in a lower energy range where meeting nutrient needs takes more care. "
+                "Choose a slower rate, or set acknowledge_low_energy_warning=true to go ahead.")
         saved_goal = _tg.goal_weight_kg(user)
         if rate == before["rate_lb_per_week"] and (
                 saved_goal is None if goal_kg is None
@@ -1727,9 +1864,14 @@ def set_weight_goal(
                                "weight_goal": before}, indent=2, ensure_ascii=False)
         client.set_preference(_tg.WEIGHT_GOAL_RATE, _pref_num(rate))
         client.set_preference(_tg.GOAL_WEIGHT_KG, None if goal_kg is None else _pref_num(goal_kg))
+        if review == "NOT_RECOMMENDED" and not before["low_rate_warning_acknowledged"]:
+            client.set_preference(_tg.AGGRESSIVE_RATE_ACK, "true")
         after = _tg.weight_goal_summary(client.get_user())
-        return json.dumps({"status": "success", "previous": before, "updated": after},
-                          indent=2, ensure_ascii=False)
+        out = {"status": "success", "previous": before, "updated": after}
+        if review == "CAUTIOUS":
+            out["note"] = ("Cronometer notes this rate makes a larger gap between energy intake "
+                           "and expenditure; a slower rate may be easier to sustain.")
+        return json.dumps(out, indent=2, ensure_ascii=False)
     except Exception as e:
         return _error(e)
 
