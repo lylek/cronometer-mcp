@@ -16,7 +16,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io/) server that 
 - **Custom foods, recipes and meals** — list, inspect (with nested recipes), create, edit, copy and delete
 - **Exercise, biometrics and energy expenditure** — exercises (tracker activity vs workouts), daily biometrics incl. Garmin sleep/HRV, and the Diary page's BMR / baseline / tracker / exercise / TEF breakdown, read without using CSV export quota
 - **Macro targets** — read/write daily targets, apply a saved template to one day, create templates, set weekly schedules
-- **Nutrient targets & profile** — read and edit every nutrient target (min, max, visibility, custom vs default), sex, birthday, pregnancy status, height, BMR, activity level, TEF, weight goal (goal weight and rate) and a custom energy target
+- **Nutrient targets & profile** — read and edit every nutrient target (min, max, visibility, custom vs default), sex, birthday, pregnancy status, height, BMR, activity level, TEF, weight goal (goal weight and rate), custom energy target, and the default macro targets (ratios or fixed amounts, net or total carbs)
 - **Fasting** — view history and stats, cancel or delete fasts
 - **Biometrics** — log and remove weight, blood glucose, heart rate, body fat
 - **Raw CSV export** — servings, daily summary, exercises, biometrics, or notes
@@ -231,8 +231,10 @@ server repeats that calculation from your profile, settings and diary.
 | `get_nutrient_targets` | Every nutrient target with name, unit, min, max, visibility and whether it's custom |
 | `set_nutrient_target` | Set a nutrient's min/max (making it custom), show/hide it, or go back to the default |
 | `get_profile` | Sex, birthday, pregnancy status, height, weight, body fat, weight goal, BMR, activity level, TEF and energy target settings |
-| `update_profile` | Change any of the above except the weight goal (weight and body fat are logged with `add_biometric`) |
-| `set_weight_goal` | Set a goal weight and weekly rate (lb or kg), or maintain; returns the energy target and forecast date it gives |
+| `update_profile` | Change any of the above except the weight goal and macro settings, plus whether energy burned above baseline is added to the energy target (weight and body fat are logged with `add_biometric`) |
+| `set_weight_goal` | Set a goal weight and weekly rate (lb or kg), or maintain; returns the energy target and forecast date it gives. Weight-loss rates Cronometer rates not recommended for your energy needs need `acknowledge_low_energy_warning` |
+| `get_macro_settings` | Default macro targets: Ratios or Fixed Targets, the ratios and gram amounts, net or total carb tracking and what net carbs subtract |
+| `update_macro_settings` | Change any of those |
 
 Nutrients can be named ("Vitamin D", "sodium", "B12") or given by id. After a
 change to sex, birthday, pregnancy status or height, the default targets are
