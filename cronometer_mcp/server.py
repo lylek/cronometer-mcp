@@ -1713,8 +1713,8 @@ def update_macro_settings(
         net_carbs_subtract: Which of "fiber", "sugar_alcohols", "allulose"
             and "fructose" to subtract from total carbs to give net carbs
             (the full list; [] subtracts none).
-        keto_program: The Keto Calculator program: "Keto Fast" (0.5 g protein
-            per kg lean body mass, 10 g carbs), "Rigorous" (1 g/kg, 20 g),
+        keto_program: The Keto Calculator program: "Rigorous" (1 g protein
+            per kg lean body mass, 20 g carbs),
             "Moderate" (1.5 g/kg, 40 g, plus 1 g carbs per 50 kcal of
             exercise), "Relaxed" (2.5 g/kg, 50 g, plus the exercise bonus) or
             "Custom". Fat fills the rest of the energy target.

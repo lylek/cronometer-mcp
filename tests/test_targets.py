@@ -579,8 +579,8 @@ def test_keto_summary_logged_body_fat():
     assert k["targets_g"]["protein"] == 84
 
 
-@pytest.mark.parametrize("name,want", [("keto_fast", "Keto Fast"), ("KetoFast", "Keto Fast"),
-                                       ("relaxed", "Relaxed"), ("CUSTOM", "Custom")])
+@pytest.mark.parametrize("name,want", [("relaxed", "Relaxed"), ("CUSTOM", "Custom"),
+                                       ("Moderate", "Moderate")])
 def test_resolve_keto_program(name, want):
     assert tg.resolve_keto_program(name) == want
 
@@ -602,6 +602,7 @@ def test_update_macro_settings_keto_custom(client):
 @pytest.mark.parametrize("kw", [
     dict(mode="paleo"),
     dict(keto_program="carnivore"),
+    dict(keto_program="keto fast"),  # only for Mercola study members
     dict(keto_carb_limit_g=30),  # saved program is Moderate, not Custom
     dict(keto_program="moderate", keto_protein_g_per_kg=1.2),
     dict(keto_program="custom", keto_protein_g_per_kg=0),
