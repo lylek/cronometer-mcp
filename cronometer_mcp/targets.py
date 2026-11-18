@@ -31,8 +31,9 @@ Where each setting lives in Cronometer:
   when "false", subtract that nutrient from total carbs to give net carbs.
   The kcal/grams and %/ratio switches next to these only change how the
   website displays or takes input, so they are left alone.
-- Keto Calculator: ``macro.keto.level`` names a program (Keto Fast,
-  Rigorous, Moderate, Relaxed or Custom). Each sets protein in g per kg of
+- Keto Calculator: ``macro.keto.level`` names a program (Rigorous,
+  Moderate, Relaxed or Custom; Keto Fast is offered only to members of the
+  Mercola study). Each sets protein in g per kg of
   lean body mass, a carb limit in grams and whether exercise earns extra
   carbs (1 g per 50 kcal burned); Custom takes them from
   ``macro.keto.protein``, ``macro.keto.carb`` and ``macro.keto.bonus``.
@@ -378,11 +379,14 @@ def _java_round(x: float) -> int:
     return math.floor(x + 0.5)
 
 
+KETO_MERCOLA_ONLY = ("Keto Fast",)
+
+
 def resolve_keto_program(value: str) -> str:
-    """A program name, ignoring case, spaces and underscores ("keto_fast")."""
+    """A program the website offers, ignoring case, spaces and underscores."""
     def key(v: str) -> str:
         return v.lower().replace(" ", "").replace("_", "")
-    names = (*KETO_PROGRAMS, KETO_CUSTOM)
+    names = tuple(n for n in (*KETO_PROGRAMS, KETO_CUSTOM) if n not in KETO_MERCOLA_ONLY)
     for name in names:
         if key(name) == key(value):
             return name
