@@ -31,6 +31,16 @@ Where each setting lives in Cronometer:
   when "false", subtract that nutrient from total carbs to give net carbs.
   The kcal/grams and %/ratio switches next to these only change how the
   website displays or takes input, so they are left alone.
+- Keto Calculator: ``macro.keto.level`` names a program (Keto Fast,
+  Rigorous, Moderate, Relaxed or Custom). Each sets protein in g per kg of
+  lean body mass, a carb limit in grams and whether exercise earns extra
+  carbs (1 g per 50 kcal burned); Custom takes them from
+  ``macro.keto.protein``, ``macro.keto.carb`` and ``macro.keto.bonus``.
+  Lean body mass uses the latest logged body fat, else an estimate from
+  height and weight. Pregnancy or lactation adds 25 g protein. Fat is the
+  rest of the energy target at 4/4/9 kcal per gram; Keto Fast replaces the
+  energy target with 3.5 kcal per lb of lean body mass. (Members of the
+  Mercola study get lower protein amounts; that isn't modelled.)
 - Current weight and body fat are biometrics (add_biometric).
 """
 
@@ -70,6 +80,20 @@ NET_CARB_EXCLUSIONS = {
     "fructose": ("targets.macros.fructose", "true"),
 }
 MACRO_SETTING_MODES = {0: "Fixed Targets", 6: "Ratios", 5: "Keto Calculator"}
+KETO_PROGRAM = "macro.keto.level"
+KETO_PROTEIN = "macro.keto.protein"
+KETO_CARBS = "macro.keto.carb"
+KETO_BONUS = "macro.keto.bonus"
+# Program: (protein g per kg lean body mass, carb limit g, exercise carb bonus).
+# "Custom" uses the KETO_* preferences, with Moderate's values as defaults.
+KETO_PROGRAMS = {
+    "Keto Fast": (0.5, 10, False),
+    "Rigorous": (1.0, 20, False),
+    "Moderate": (1.5, 40, True),
+    "Relaxed": (2.5, 50, True),
+}
+KETO_CUSTOM = "Custom"
+KETO_DEFAULT = "Moderate"
 
 LB_KG = 0.45359237
 # Daily kcal per 1 lb/week of weight change, as the web client computes it.
@@ -192,7 +216,7 @@ def profile_summary(user: dict, day: date | None = None) -> dict:
         "body_fat_logged": fat_day,
         "display_units": {"height": s.get("heightUnit"), "weight": s.get("weightUnit")},
         "weight_goal": weight_goal_summary(user, day),
-        "macro_settings": macro_settings_summary(user),
+        "macro_settings": macro_settings_summary(user, day),
         "energy": {
             "bmr_kcal": round(bmr),
             "bmr_source": "custom" if p["bmr_override"] is not None else "Mifflin-St Jeor",
@@ -327,7 +351,7 @@ def _flag(s: dict, key: str, default: str) -> bool:
     return s.get(key, default) == "true"
 
 
-def macro_settings_summary(user: dict) -> dict:
+def macro_settings_summary(user: dict, day: date | None = None) -> dict:
     """The default macro targets from Macro & Energy Targets."""
     s = diary.settings(user)
     mode = int(_pref_float(s, MACRO_MODE) or 0)
@@ -346,6 +370,92 @@ def macro_settings_summary(user: dict) -> dict:
         "net_carbs_subtract": [k for k, (key, d) in NET_CARB_EXCLUSIONS.items()
                                if not _flag(s, key, d)],
         "add_expenditure_above_baseline": _flag(s, INCLUDE_EXERCISE, "true"),
+        "keto_calculator": keto_summary(user, day),
+    }
+
+
+def _java_round(x: float) -> int:
+    return math.floor(x + 0.5)
+
+
+def resolve_keto_program(value: str) -> str:
+    """A program name, ignoring case, spaces and underscores ("keto_fast")."""
+    def key(v: str) -> str:
+        return v.lower().replace(" ", "").replace("_", "")
+    names = (*KETO_PROGRAMS, KETO_CUSTOM)
+    for name in names:
+        if key(name) == key(value):
+            return name
+    raise ValueError(f"unknown keto program {value!r}; use one of {list(names)}")
+
+
+def keto_values(s: dict) -> tuple[str, float, float, bool]:
+    """The saved program and its (protein g/kg, carb limit g, bonus)."""
+    program = s.get(KETO_PROGRAM) or KETO_DEFAULT
+    if program in KETO_PROGRAMS:
+        return (program, *KETO_PROGRAMS[program])
+    protein, carbs, bonus = KETO_PROGRAMS[KETO_DEFAULT]
+    if program != KETO_CUSTOM:  # unknown name: the website falls back to Moderate
+        return (KETO_DEFAULT, protein, carbs, bonus)
+    p = _pref_float(s, KETO_PROTEIN)
+    c = _pref_float(s, KETO_CARBS)
+    return (KETO_CUSTOM, protein if p is None else p, carbs if c is None else c,
+            _flag(s, KETO_BONUS, "true"))
+
+
+def estimated_body_fat(weight_kg: float, height_cm: float, sex: str | None) -> float:
+    """The website's body-fat estimate (a fraction) when none is logged."""
+    h = height_cm / 100
+    lean_guess = max(0.0, weight_kg - 18.75 * h * h)
+    return max(0.05, lean_guess / weight_kg) + (0.03 if sex == "Female" else 0)
+
+
+def energy_target(user: dict, day: date | None = None) -> int:
+    """The energy target before exercise: a custom target, else BMR +
+    baseline activity + the weight-goal adjustment."""
+    custom = _pref_float(diary.settings(user), CUSTOM_ENERGY)
+    if custom is not None:
+        return round(custom)
+    return weight_goal_summary(user, day)["energy_target_kcal"]
+
+
+def keto_summary(user: dict, day: date | None = None) -> dict:
+    """The Keto Calculator's settings and the targets they give (for a day
+    with no exercise)."""
+    day = day or date.today()
+    s = diary.settings(user)
+    p = diary.profile(user, day)
+    program, protein_per_kg, carb_limit, bonus = keto_values(s)
+    weight = min(p["weight_kg"], 2000)
+    fat_pct, fat_day = body_fat_on(user, day)
+    if fat_pct is not None:
+        fraction, source = fat_pct / 100, f"logged {fat_day}"
+    else:
+        fraction = estimated_body_fat(p["weight_kg"], p["height_cm"], p["sex"])
+        source = "estimated from height and weight"
+    lean = weight * (1 - fraction)
+    protein = protein_per_kg * lean
+    if p["sex"] != "Male" and p["reproductive_status"] in ("Pregnant", "Lactating"):
+        protein += 25
+    protein = _java_round(protein)
+    carbs = _java_round(carb_limit)
+    energy = (3.5 * lean * 2.204622620001839 if program == "Keto Fast"
+              else energy_target(user, day))
+    fat = max(0.0, (energy - (protein + carbs) * 4) / 9)
+    return {
+        "program": program,
+        "protein_g_per_kg_lean_mass": protein_per_kg,
+        "carb_limit_g": carb_limit,
+        "exercise_carb_bonus": bonus,
+        "body_fat_percent": round(fraction * 100, 1),
+        "body_fat_source": source,
+        "lean_body_mass_kg": round(lean, 1),
+        "energy_target_kcal": round(energy),
+        "targets_g": {"protein": protein, "carbs": carbs, "fat": round(fat, 1)},
+        "note": ("carbs are " + ("net" if _flag(s, NET_CARBS, "true") else "total") + " carbs"
+                 + ("; exercise adds 1 g carbs per 50 kcal burned" if bonus else "")
+                 + "; fat fills the rest of the energy target, so it rises with exercise"
+                 " when that is added to the energy target"),
     }
 
 

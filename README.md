@@ -233,7 +233,7 @@ server repeats that calculation from your profile, settings and diary.
 | `get_profile` | Sex, birthday, pregnancy status, height, weight, body fat, weight goal, BMR, activity level, TEF and energy target settings |
 | `update_profile` | Change any of the above except the weight goal and macro settings, plus whether energy burned above baseline is added to the energy target (weight and body fat are logged with `add_biometric`) |
 | `set_weight_goal` | Set a goal weight and weekly rate (lb or kg), or maintain; returns the energy target and forecast date it gives. Weight-loss rates Cronometer rates not recommended for your energy needs need `acknowledge_low_energy_warning` |
-| `get_macro_settings` | Default macro targets: Ratios or Fixed Targets, the ratios and gram amounts, net or total carb tracking and what net carbs subtract |
+| `get_macro_settings` | Default macro targets: Ratios, Fixed Targets or Keto Calculator, the ratios and gram amounts, the keto program and the targets it gives, net or total carb tracking and what net carbs subtract |
 | `update_macro_settings` | Change any of those |
 
 Nutrients can be named ("Vitamin D", "sodium", "B12") or given by id. After a
