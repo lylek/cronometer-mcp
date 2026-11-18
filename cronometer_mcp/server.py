@@ -1666,6 +1666,10 @@ def get_macro_settings() -> str:
     track_carbs_as is used), whether carbs are tracked as net or total, which
     nutrients are subtracted from total carbs to give net carbs, and whether
     energy burned above baseline activity is added to the energy target.
+
+    keto_calculator gives the Keto Calculator's program and settings, and the
+    protein, carb and fat targets they work out to today (on a day with no
+    exercise), with the lean body mass and energy target behind them.
     """
     try:
         user = _get_client().get_user()
@@ -1687,6 +1691,10 @@ def update_macro_settings(
     fat_g: float | None = None,
     track_carbs_as: str | None = None,
     net_carbs_subtract: list[str] | None = None,
+    keto_program: str | None = None,
+    keto_protein_g_per_kg: float | None = None,
+    keto_carb_limit_g: float | None = None,
+    keto_exercise_carb_bonus: bool | None = None,
 ) -> str:
     """Change the default macro targets in Macro & Energy Targets on
     Targets + Profile. Only the arguments given change. These apply on days
@@ -1694,8 +1702,7 @@ def update_macro_settings(
     apply_macro_template.
 
     Args:
-        mode: "ratios" or "fixed" (Fixed Targets). The Keto Calculator isn't
-            supported.
+        mode: "ratios", "fixed" (Fixed Targets) or "keto" (Keto Calculator).
         protein_percent, carbs_percent, fat_percent: Ratios, as percent of
             energy. Give all three; they must add up to 100.
         protein_g, carbs_g, fat_g: Fixed Targets in grams. carbs_g sets net
@@ -1706,6 +1713,14 @@ def update_macro_settings(
         net_carbs_subtract: Which of "fiber", "sugar_alcohols", "allulose"
             and "fructose" to subtract from total carbs to give net carbs
             (the full list; [] subtracts none).
+        keto_program: The Keto Calculator program: "Keto Fast" (0.5 g protein
+            per kg lean body mass, 10 g carbs), "Rigorous" (1 g/kg, 20 g),
+            "Moderate" (1.5 g/kg, 40 g, plus 1 g carbs per 50 kcal of
+            exercise), "Relaxed" (2.5 g/kg, 50 g, plus the exercise bonus) or
+            "Custom". Fat fills the rest of the energy target.
+        keto_protein_g_per_kg, keto_carb_limit_g, keto_exercise_carb_bonus:
+            The Custom program's protein (g per kg of lean body mass), carb
+            limit (g) and exercise carb bonus. Only for the Custom program.
     """
     try:
         client = _get_client()
@@ -1715,9 +1730,10 @@ def update_macro_settings(
         prefs: list[tuple[str, str]] = []
 
         if mode is not None:
-            want = {"ratios": 6, "ratio": 6, "fixed": 0, "fixed targets": 0}.get(mode.strip().lower())
+            want = {"ratios": 6, "ratio": 6, "fixed": 0, "fixed targets": 0, "keto": 5,
+                    "keto calculator": 5}.get(mode.strip().lower())
             if want is None:
-                raise ValueError(f"mode must be 'ratios' or 'fixed', not {mode!r}")
+                raise ValueError(f"mode must be 'ratios', 'fixed' or 'keto', not {mode!r}")
             prefs.append((_tg.MACRO_MODE, str(want)))
 
         ratios = (protein_percent, carbs_percent, fat_percent)
@@ -1753,6 +1769,26 @@ def update_macro_settings(
                                  f"{list(_tg.NET_CARB_EXCLUSIONS)}")
             for name, (key, _) in _tg.NET_CARB_EXCLUSIONS.items():
                 prefs.append((key, "false" if name in names else "true"))
+
+        program = settings.get(_tg.KETO_PROGRAM) or _tg.KETO_DEFAULT
+        if keto_program is not None:
+            program = _tg.resolve_keto_program(keto_program)
+            prefs.append((_tg.KETO_PROGRAM, program))
+        custom = (keto_protein_g_per_kg, keto_carb_limit_g, keto_exercise_carb_bonus)
+        if any(v is not None for v in custom):
+            if program != _tg.KETO_CUSTOM:
+                raise ValueError(f"the keto program is {program}; custom protein, carbs and "
+                                 "bonus apply only with keto_program='Custom'")
+            if keto_protein_g_per_kg is not None:
+                if not 0 < keto_protein_g_per_kg <= 10:
+                    raise ValueError(f"{keto_protein_g_per_kg:g} g/kg is out of range")
+                prefs.append((_tg.KETO_PROTEIN, _pref_num(keto_protein_g_per_kg)))
+            if keto_carb_limit_g is not None:
+                if not 0 <= keto_carb_limit_g <= 2000:
+                    raise ValueError(f"{keto_carb_limit_g:g} g is out of range")
+                prefs.append((_tg.KETO_CARBS, _pref_num(keto_carb_limit_g)))
+            if keto_exercise_carb_bonus is not None:
+                prefs.append((_tg.KETO_BONUS, "true" if keto_exercise_carb_bonus else "false"))
 
         changes = [(k, v) for k, v in prefs if settings.get(k) != v]
         if not changes:

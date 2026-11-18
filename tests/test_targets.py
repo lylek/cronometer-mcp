@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from cronometer_mcp import diary
 from cronometer_mcp import gwt_foods as g
 from cronometer_mcp import nutrients
 from cronometer_mcp import server
@@ -535,8 +536,75 @@ def test_update_macro_settings_no_change(client):
     client.set_preference.assert_not_called()
 
 
+# 70 kg, 180 cm man with no body fat logged: the estimate gives 60.75 kg lean mass.
+KETO = {"macroIndex": "5", "targets.custom.energy.target": "2000"}
+
+
+def test_keto_summary_default_program():
+    k = tg.macro_settings_summary(user(settings=KETO))["keto_calculator"]
+    assert (k["program"], k["protein_g_per_kg_lean_mass"], k["carb_limit_g"],
+            k["exercise_carb_bonus"]) == ("Moderate", 1.5, 40, True)
+    assert (k["lean_body_mass_kg"], k["body_fat_source"]) == (60.8, "estimated from height and weight")
+    # protein 1.5 x 60.75 = 91; fat = (2000 - (91 + 40) x 4) / 9
+    assert k["targets_g"] == {"protein": 91, "carbs": 40, "fat": 164.0}
+    assert k["energy_target_kcal"] == 2000
+
+
+def test_keto_summary_keto_fast_replaces_energy_target():
+    k = tg.keto_summary(user(settings={**KETO, "macro.keto.level": "Keto Fast"}))
+    # 3.5 kcal per lb of lean mass
+    assert k["energy_target_kcal"] == 469
+    assert k["targets_g"] == {"protein": 30, "carbs": 10, "fat": 34.3}
+    assert k["exercise_carb_bonus"] is False
+
+
+def test_keto_summary_custom_and_pregnancy():
+    prefs = {**KETO, "macro.keto.level": "Custom", "macro.keto.protein": "2",
+             "macro.keto.carb": "25", "macro.keto.bonus": "false"}
+    k = tg.keto_summary(user(settings=prefs, sex="Female", repro="Pregnant"))
+    # women's estimate adds 3% body fat: lean mass 58.65 kg; pregnancy adds 25 g protein
+    assert k["lean_body_mass_kg"] == 58.6
+    assert (k["program"], k["exercise_carb_bonus"]) == ("Custom", False)
+    assert k["targets_g"]["protein"] == 142  # 2 x 58.65 + 25
+    assert k["targets_g"]["carbs"] == 25
+
+
+def test_keto_summary_logged_body_fat():
+    u = user(settings=KETO)
+    u["body_fat_history"] = {"points": {"items": [
+        {"day": diary.day_obj(date(2026, 1, 1)), "value": 20.0}]}}
+    k = tg.keto_summary(u, date(2026, 2, 1))
+    assert (k["body_fat_percent"], k["body_fat_source"]) == (20.0, "logged 2026-01-01")
+    assert k["lean_body_mass_kg"] == 56.0
+    assert k["targets_g"]["protein"] == 84
+
+
+@pytest.mark.parametrize("name,want", [("keto_fast", "Keto Fast"), ("KetoFast", "Keto Fast"),
+                                       ("relaxed", "Relaxed"), ("CUSTOM", "Custom")])
+def test_resolve_keto_program(name, want):
+    assert tg.resolve_keto_program(name) == want
+
+
+def test_update_macro_settings_keto_program(client):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    server.update_macro_settings(mode="keto", keto_program="rigorous")
+    assert _prefs(client) == [("macroIndex", "5"), ("macro.keto.level", "Rigorous")]
+
+
+def test_update_macro_settings_keto_custom(client):
+    client.get_user.return_value = user(settings=MACRO_PREFS)
+    server.update_macro_settings(keto_program="custom", keto_protein_g_per_kg=1.2,
+                                 keto_carb_limit_g=30, keto_exercise_carb_bonus=False)
+    assert _prefs(client) == [("macro.keto.level", "Custom"), ("macro.keto.protein", "1.2"),
+                              ("macro.keto.carb", "30"), ("macro.keto.bonus", "false")]
+
+
 @pytest.mark.parametrize("kw", [
-    dict(mode="keto"),
+    dict(mode="paleo"),
+    dict(keto_program="carnivore"),
+    dict(keto_carb_limit_g=30),  # saved program is Moderate, not Custom
+    dict(keto_program="moderate", keto_protein_g_per_kg=1.2),
+    dict(keto_program="custom", keto_protein_g_per_kg=0),
     dict(protein_percent=30, carbs_percent=40),
     dict(protein_percent=30, carbs_percent=40, fat_percent=20),
     dict(track_carbs_as="gross"),
