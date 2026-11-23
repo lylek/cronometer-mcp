@@ -225,11 +225,13 @@ def summarize_exercise(ex: dict, group_names: dict[int, str]) -> dict:
 
 
 def summarize_biometric(b: dict, metrics: dict[int, dict]) -> dict:
-    """A biometric entry with its metric name; values are in the base unit."""
+    """A biometric entry with its metric name; the value is in the entry's own
+    unit (unit_id), e.g. a weight logged in lbs is stored in lbs."""
     metric = metrics.get(b.get("metric_id"), {})
     units = metric.get("units", [])
-    # Values are stored in the base unit (conversion factor 1).
-    base = next((u[1] for u in units if u[2] == 1.0), units[0][1] if units else None)
+    base = next((u[1] for u in units if u[0] == b.get("unit_id")), None)
+    if base is None:  # unknown unit id: fall back to the base unit (factor 1)
+        base = next((u[1] for u in units if u[2] == 1.0), units[0][1] if units else None)
     if base == "hr:min":
         base = "hours"  # a display format; the stored value is decimal hours
     meta = None

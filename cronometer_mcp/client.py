@@ -2940,15 +2940,16 @@ class CronometerClient:
             )
         return self._summary_after_save(self._save_food(food, update_past_entries))
 
-    def reorder_recipe_ingredients(self, food_id: int, order: list) -> dict | None:
+    def reorder_recipe_ingredients(self, food_id: int, order: list,
+                                   update_past_entries: bool | None = None) -> dict | None:
         """Put a recipe's ingredients in a new order; None if already in it.
 
         ``order`` lists every ingredient once, by ingredient_id or by its
         1-based position. The server keeps ingredient rows in the order they
         were created, so the rows are saved again as new rows in the new
         order (with new ingredient_ids); amounts and measures are unchanged.
-        Nothing about the recipe's nutrients changes, so a recipe already in
-        the diary is edited in place.
+        The mobile app does the same. As with any edit, a recipe in use needs
+        ``update_past_entries`` (else FoodInUseError).
         """
         food = self._get_food_raw(food_id)
         if not cf.is_recipe(food):
@@ -2958,7 +2959,7 @@ class CronometerClient:
         if [r["id"] for r in new] == [r["id"] for r in rows]:
             return None
         food["ingredients"]["items"] = [dict(copy.deepcopy(r), id="A") for r in new]
-        return self._summary_after_save(self._save_food(food, True))
+        return self._summary_after_save(self._save_food(food, update_past_entries))
 
     def edit_custom_food(
         self,

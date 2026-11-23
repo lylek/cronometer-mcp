@@ -45,13 +45,19 @@ def _client_with_recipe():
     return c
 
 
-def test_client_reorder_saves_new_rows_in_place():
+def test_client_reorder_saves_new_rows():
     c = _client_with_recipe()
-    saved = c.reorder_recipe_ingredients(99, [3, 1, 2])
+    saved = c.reorder_recipe_ingredients(99, [3, 1, 2], update_past_entries=True)
     rows = saved["ingredients"]["items"]
     assert [(r["food_id"], r["id"], r["amount"], r["unknown_4"]) for r in rows] == [
         (3, "A", 10.0, 7), (1, "A", 10.0, 7), (2, "A", 10.0, 7)]
-    assert c._save_food.call_args.args[1] is True  # edit in place, never fork a copy
+    assert c._save_food.call_args.args[1] is True
+
+
+def test_client_reorder_leaves_in_use_decision_to_caller():
+    c = _client_with_recipe()
+    c.reorder_recipe_ingredients(99, [2, 1, 3])
+    assert c._save_food.call_args.args[1] is None  # _save_food asks if the recipe is in use
 
 
 def test_client_reorder_same_order_saves_nothing():

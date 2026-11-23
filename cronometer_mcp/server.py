@@ -2082,23 +2082,31 @@ def edit_custom_recipe(
 
 
 @_write_tool
-def reorder_recipe_ingredients(food_source_id: int, order: list[str | int]) -> str:
+def reorder_recipe_ingredients(food_source_id: int, order: list[str | int],
+                               update_past_entries: bool | None = None) -> str:
     """Put a custom recipe's or meal's ingredients in a new order (the
     website can only add new ingredients at the end).
 
     Cronometer lists ingredients in the order their rows were created, so
     the ingredients are saved again as new rows in the new order: they get
-    new ingredient_ids, while amounts, measures and nutrients stay the same.
-    A recipe already in your diary is changed in place (no copy is made).
+    new ingredient_ids, while amounts, measures and nutrients stay the same
+    (the mobile app does the same).
+
+    As with edit_custom_recipe, a recipe already logged or used in other
+    recipes returns status "needs_decision" and changes nothing until you
+    ask the user and call again with update_past_entries: True reorders it
+    in place; False saves the reordered recipe as a new one with a new id.
 
     Args:
         food_source_id: The recipe's id.
         order: Every ingredient once, in the new order: its ingredient_id
             (from get_custom_food) or its current 1-based position. For
             example [3, 1, 2] moves the third ingredient to the top.
+        update_past_entries: See above. Only needed when the recipe is in use.
     """
     try:
-        food = _get_client().reorder_recipe_ingredients(food_source_id, order)
+        food = _get_client().reorder_recipe_ingredients(food_source_id, order,
+                                                        update_past_entries)
         if food is None:
             return json.dumps({"status": "success",
                                "message": "The ingredients are already in that order."})
