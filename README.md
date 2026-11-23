@@ -172,6 +172,8 @@ the credentials themselves keep full access.
 | `get_food_details` | Get a food's serving sizes: measure IDs and gram weights |
 | `add_food_entry` | Log a food, recipe or meal by grams, or by quantity of a serving size ("6.5 oz", "1 full recipe", "0.5 capsule"), stored as the website does |
 | `remove_food_entry` | Remove a food entry from the diary |
+| `get_diary_order` | A day's entries (foods, exercises, biometrics, notes) group by group, in display order, with entry ids |
+| `reorder_diary_entries` | Rearrange a diary group's entries, or move entries into it from another group |
 | `copy_day` | Copy all diary entries from one date to another |
 | `set_day_complete` | Mark a diary day as complete or incomplete |
 
@@ -183,6 +185,7 @@ the credentials themselves keep full access.
 | `get_custom_food` | Show nutrients, serving sizes and ingredients, expanding nested recipes |
 | `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients |
 | `edit_custom_recipe` | Rename, change servings/notes, or replace a recipe's or meal's ingredients |
+| `reorder_recipe_ingredients` | Put a recipe's or meal's ingredients in a new order (the website only adds at the end) |
 | `edit_custom_food` | Change a custom food's name, notes, nutrients or serving sizes |
 | `copy_custom_food` | Copy a food, recipe or meal to a new item with a new id |
 | `delete_custom_food` | Delete a custom food, recipe or meal |

@@ -453,6 +453,33 @@ def build_ingredient(spec: dict, child: dict, existing: dict | None = None) -> d
     return ing
 
 
+def reorder_ingredients(rows: list[dict], order: list) -> list[dict]:
+    """The ingredient rows in a new order. ``order`` names every row once, by
+    ingredient_id (a string) or 1-based position (an int)."""
+    by_id = {r["id"]: r for r in rows}
+    picked = []
+    for key in order:
+        if isinstance(key, bool):
+            raise ValueError(f"bad ingredient {key!r}")
+        if isinstance(key, int) or (isinstance(key, str) and key.isdigit()
+                                    and key not in by_id):
+            pos = int(key)
+            if not 1 <= pos <= len(rows):
+                raise ValueError(f"no ingredient at position {pos}; the recipe has {len(rows)}")
+            picked.append(rows[pos - 1])
+        elif key in by_id:
+            picked.append(by_id[key])
+        else:
+            raise ValueError(f"no ingredient with ingredient_id {key!r}")
+    ids = [r["id"] for r in picked]
+    if len(set(ids)) != len(ids):
+        raise ValueError("an ingredient is listed twice")
+    if len(picked) != len(rows):
+        raise ValueError(f"list all {len(rows)} ingredients in their new order "
+                         f"(got {len(picked)})")
+    return picked
+
+
 def recipe_measure(name: str, weight: float) -> dict:
     return {
         "$class": g.MEASURE, "quantity": 1.0, "unknown_1": False, "food_id": 0,

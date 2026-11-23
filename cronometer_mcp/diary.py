@@ -77,7 +77,9 @@ def diary_group(entry: dict) -> int:
 
 # --- entry order --------------------------------------------------------------
 # An entry's ``order`` packs its diary group slot (high 16 bits) and its
-# 1-based position within the group (low 16 bits).
+# 1-based position within the group (low 16 bits). After a drag, the web
+# client renumbers every group in display order and sends the entries whose
+# order changed to ``updateOrders``.
 
 
 def _position(entry: dict) -> int:
@@ -90,6 +92,71 @@ def group_layout(day_info: dict) -> dict[int, list[dict]]:
     for e in sorted(entries(day_info), key=lambda e: e.get("order") or 0):
         out.setdefault(diary_group(e), []).append(e)
     return out
+
+
+def entry_label(e: dict, foods: dict[int, dict], metrics: dict[int, dict]) -> str:
+    """A short description of a diary entry."""
+    kind = g.short_class(e)
+    if kind == "Serving":
+        food = foods.get(e.get("food_id"))
+        return cf.food_name(food) if food else f"food {e.get('food_id')}"
+    if kind == "Exercise":
+        return f"{e.get('name')} ({round(e.get('minutes') or 0)} min)"
+    if kind == "Note":
+        text = (e.get("text") or "").strip().replace("\n", " ")
+        return text if len(text) <= 80 else text[:77] + "..."
+    if "Biometric" in kind:
+        b = summarize_biometric(e, metrics)
+        value = b["value"]
+        if isinstance(value, float):
+            value = round(value, 2)
+        return f"{b['metric']}: {value} {b['unit'] or ''}".strip()
+    return kind
+
+
+def reorder_group(day_info: dict, slot: int, order: list) -> list[dict]:
+    """Put the entries of one diary group in a new order and return copies
+    of the entries whose ``order`` changes, renumbered as the web client does.
+
+    ``order`` lists every entry of the group once, by entry id (the GWT id
+    string) or by current 1-based position in the group. An entry id from
+    another group moves that entry into this one.
+    """
+    layout = group_layout(day_info)
+    current = layout.get(slot, [])
+    by_id = {e["id"]: e for e in entries(day_info)}
+    picked: list[dict] = []
+    for key in order:
+        if isinstance(key, bool):
+            raise ValueError(f"bad entry {key!r}")
+        if isinstance(key, str) and key in by_id:
+            picked.append(by_id[key])
+        elif isinstance(key, int) or (isinstance(key, str) and key.isdigit()):
+            pos = int(key)
+            if not 1 <= pos <= len(current):
+                raise ValueError(f"no entry at position {pos}; the group has {len(current)}")
+            picked.append(current[pos - 1])
+        else:
+            raise ValueError(f"no entry with entry_id {key!r} on this day")
+    ids = [e["id"] for e in picked]
+    if len(set(ids)) != len(ids):
+        raise ValueError("an entry is listed twice")
+    missing = [e["id"] for e in current if e["id"] not in set(ids)]
+    if missing:
+        raise ValueError(f"list every entry of the group in its new order; missing {missing} "
+                         "(to move an entry to another group, reorder that group instead)")
+    moved = set(ids)
+    for other, rows in layout.items():
+        if other != slot:
+            layout[other] = [e for e in rows if e["id"] not in moved]
+    layout[slot] = picked
+    changed = []
+    for grp, rows in layout.items():
+        for i, e in enumerate(rows, 1):
+            new = (grp << 16) | i
+            if (e.get("order") or 0) != new:
+                changed.append(dict(e, order=new))
+    return changed
 
 
 # --- exercises --------------------------------------------------------------

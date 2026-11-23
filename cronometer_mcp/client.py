@@ -2940,6 +2940,26 @@ class CronometerClient:
             )
         return self._summary_after_save(self._save_food(food, update_past_entries))
 
+    def reorder_recipe_ingredients(self, food_id: int, order: list) -> dict | None:
+        """Put a recipe's ingredients in a new order; None if already in it.
+
+        ``order`` lists every ingredient once, by ingredient_id or by its
+        1-based position. The server keeps ingredient rows in the order they
+        were created, so the rows are saved again as new rows in the new
+        order (with new ingredient_ids); amounts and measures are unchanged.
+        Nothing about the recipe's nutrients changes, so a recipe already in
+        the diary is edited in place.
+        """
+        food = self._get_food_raw(food_id)
+        if not cf.is_recipe(food):
+            raise ValueError(f"{food_id} is a {cf.food_type(food)}, not a recipe or meal")
+        rows = cf.items(food["ingredients"])
+        new = cf.reorder_ingredients(rows, order)
+        if [r["id"] for r in new] == [r["id"] for r in rows]:
+            return None
+        food["ingredients"]["items"] = [dict(copy.deepcopy(r), id="A") for r in new]
+        return self._summary_after_save(self._save_food(food, True))
+
     def edit_custom_food(
         self,
         food_id: int,
@@ -3038,6 +3058,40 @@ class CronometerClient:
             groups = self._group_names()
             out += [diary.summarize_exercise(e, groups) for e in diary.entries(info, "Exercise")]
         return out
+
+    def get_diary_order(self, day: date) -> list[dict]:
+        """A day's diary groups with their entries in display order."""
+        info = self.get_day_info(day)
+        layout = diary.group_layout(info)
+        food_ids = [e["food_id"] for rows in layout.values() for e in rows
+                    if gwt_foods.short_class(e) == "Serving"]
+        foods = self.get_foods_raw(food_ids) if food_ids else {}
+        metrics = self.get_metrics() if any(
+            "Biometric" in gwt_foods.short_class(e) for rows in layout.values() for e in rows
+        ) else {}
+        names = self._group_names()
+        return [{
+            "diary_group": names.get(slot, f"group {slot}"),
+            "wire_index": slot,
+            "entries": [{
+                "position": i,
+                "entry_id": e["id"],
+                "kind": gwt_foods.short_class(e).replace("SleepBiometric", "Biometric"),
+                "description": diary.entry_label(e, foods, metrics),
+                "time": diary.fmt_time(e.get("time")),
+            } for i, e in enumerate(rows, 1)],
+        } for slot, rows in sorted(layout.items())]
+
+    def reorder_diary_group(self, day: date, slot: int, order: list) -> int:
+        """Reorder one diary group (see diary.reorder_group); returns how
+        many entries changed."""
+        changed = diary.reorder_group(self.get_day_info(day), slot, order)
+        if changed:
+            self._food_rpc("updateOrders", [
+                ("java.util.List", {"$class": gwt_foods.ARRAY_LIST, "items": changed}),
+                ("I", _USER_ID),
+            ])
+        return len(changed)
 
     def get_metrics(self) -> dict[int, dict]:
         """Biometric metric catalog: id -> {name, units: [(unit_id, name, factor)]}."""

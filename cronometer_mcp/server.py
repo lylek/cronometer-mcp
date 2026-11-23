@@ -612,6 +612,55 @@ def remove_food_entry(serving_id: str) -> str:
 
 
 @_tool
+def get_diary_order(target_date: str | None = None) -> str:
+    """A day's diary entries group by group, in the order the Diary page
+    shows them: foods, exercises, biometrics and notes, each with its
+    position in its group and entry_id (for reorder_diary_entries).
+
+    Args:
+        target_date: YYYY-MM-DD (default today).
+    """
+    try:
+        day = _parse_date(target_date) or date.today()
+        groups = _get_client().get_diary_order(day)
+        return json.dumps({"status": "success", "date": str(day), "groups": groups},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def reorder_diary_entries(target_date: str, diary_group: str | int, order: list[str | int]) -> str:
+    """Rearrange the entries in one diary group, as dragging them on the
+    Diary page does. Can also move entries into this group from another.
+
+    Args:
+        target_date: YYYY-MM-DD.
+        diary_group: The group to rearrange: its name or wire_index
+            (see list_diary_groups).
+        order: Every entry of the group once, in the new order: its entry_id
+            (from get_diary_order) or its current 1-based position in the
+            group. For example [2, 1, 3] swaps the first two. Include the
+            entry_id of an entry from another group to move it here.
+    """
+    try:
+        day = _parse_date(target_date)
+        client = _get_client()
+        slot, err = _resolve_diary_group(client, diary_group)
+        if err:
+            raise ValueError(err)
+        n = client.reorder_diary_group(day, slot, order)
+        if not n:
+            return json.dumps({"status": "success",
+                               "message": "The entries are already in that order."})
+        groups = client.get_diary_order(day)
+        return json.dumps({"status": "success", "entries_renumbered": n, "date": str(day),
+                           "groups": groups}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
 def get_macro_targets(
     target_date: str | None = None,
 ) -> str:
@@ -2027,6 +2076,32 @@ def edit_custom_recipe(
             food_source_id, name, notes, servings, ingredients, update_past_entries,
             cooked_weight_g,
         )
+        return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def reorder_recipe_ingredients(food_source_id: int, order: list[str | int]) -> str:
+    """Put a custom recipe's or meal's ingredients in a new order (the
+    website can only add new ingredients at the end).
+
+    Cronometer lists ingredients in the order their rows were created, so
+    the ingredients are saved again as new rows in the new order: they get
+    new ingredient_ids, while amounts, measures and nutrients stay the same.
+    A recipe already in your diary is changed in place (no copy is made).
+
+    Args:
+        food_source_id: The recipe's id.
+        order: Every ingredient once, in the new order: its ingredient_id
+            (from get_custom_food) or its current 1-based position. For
+            example [3, 1, 2] moves the third ingredient to the top.
+    """
+    try:
+        food = _get_client().reorder_recipe_ingredients(food_source_id, order)
+        if food is None:
+            return json.dumps({"status": "success",
+                               "message": "The ingredients are already in that order."})
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:
         return _error(e)
