@@ -22,6 +22,10 @@ from pathlib import Path
 import requests
 from requests.cookies import CookieConflictError
 
+from . import custom_foods as cf
+from . import diary
+from . import gwt_foods
+
 logger = logging.getLogger(__name__)
 
 # URLs
@@ -367,6 +371,9 @@ class DiaryGroupsUnreadable(RuntimeError):
     Distinct from an account with no group settings: falling back to the
     default meals here could enable a disabled group or rename one.
     """
+
+
+_USER_ID = object()  # placeholder in _food_rpc params
 
 
 class _GwtReader:
@@ -2784,3 +2791,41 @@ class CronometerClient:
             return items
 
         return items
+
+    # ── GWT object calls: foods, diary days, metrics ─────────────────────
+    # Built on gwt_foods (object codec) and custom_foods (serving sizes).
+    # All food ids here are Food ids, the number search_foods calls
+    # food_source_id.
+
+    def _food_rpc(self, method: str, params: list):
+        """Call a CronometerService method whose first parameter is the nonce.
+
+        Pass ``_USER_ID`` for the user id: it is only known after login.
+        """
+        self.authenticate()
+        params = [(t, int(self.user_id) if v is _USER_ID else v) for t, v in params]
+        body = gwt_foods.encode_request(
+            self.gwt_header, method, [(gwt_foods.STRING, self.nonce)] + params
+        )
+        return gwt_foods.decode_response(self._gwt_post(body))
+
+    def _get_food_raw(self, food_id: int) -> dict:
+        food = self._food_rpc("getFood", [("I", int(food_id))])
+        if not food:
+            raise ValueError(f"No food with id {food_id}")
+        return food
+
+    def get_day_info(self, day: date) -> dict:
+        """Everything logged on one day (getDayInfo), as decoded GWT dicts."""
+        return self._food_rpc("getDayInfo", [(gwt_foods.DAY, diary.day_obj(day)), ("I", _USER_ID)])
+
+    def get_metrics(self) -> dict[int, dict]:
+        """Biometric metric catalog: id -> {name, units: [(unit_id, name, factor)]}."""
+        if getattr(self, "_metrics", None) is None:
+            res = self._food_rpc("getMetrics", [("I", _USER_ID)])
+            self._metrics = {
+                m["id"]: {"name": m["name"],
+                          "units": [(u["id"], u["name"], u["factor"]) for u in cf.items(m["units"])]}
+                for m in cf.items(res)
+            }
+        return self._metrics
