@@ -14,6 +14,7 @@ from cronometer_mcp import server
 
 # Every tool that changes data in the Cronometer account.
 WRITE_TOOLS = {
+    "explode_diary_entry",
     "add_food_entry", "remove_food_entry",
     "set_macro_targets", "set_weekly_macro_schedule", "create_macro_template",
     "delete_fast", "cancel_active_fast",
@@ -43,13 +44,13 @@ class TestReadOnlyMode:
     def test_default_registers_write_tools(self):
         names = _tool_names({"CRONOMETER_READ_ONLY": ""})
         assert WRITE_TOOLS <= names
-        assert len(names) == 48
+        assert len(names) == 49
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
     def test_read_only_drops_every_write_tool(self, value):
         names = _tool_names({"CRONOMETER_READ_ONLY": value})
         assert not names & WRITE_TOOLS
-        assert len(names) == 48 - len(WRITE_TOOLS)
+        assert len(names) == 49 - len(WRITE_TOOLS)
         assert {"get_food_log", "search_foods", "get_macro_targets",
                 "sync_cronometer"} <= names
 

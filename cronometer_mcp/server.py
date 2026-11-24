@@ -611,6 +611,24 @@ def remove_food_entry(serving_id: str) -> str:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
 
+@_write_tool
+def explode_diary_entry(serving_id: str) -> str:
+    """Explode a logged meal or recipe: replace its diary entry with one
+    entry per item, as the Diary's right-click "Explode" does. The items
+    keep their amounts (scaled to the amount logged) and diary group.
+
+    Args:
+        serving_id: The entry's id: the serving_id from add_food_entry or
+            the entry_id from get_diary_order.
+    """
+    try:
+        _get_client().explode_serving(serving_id)
+        return json.dumps({"status": "success", "serving_id": serving_id,
+                           "message": "Entry exploded into its items."})
+    except Exception as e:
+        return _error(e)
+
+
 @_tool
 def get_diary_order(target_date: str | None = None) -> str:
     """A day's diary entries group by group, in the order the Diary page
@@ -2011,7 +2029,10 @@ def create_custom_recipe(
         ingredients: Ingredient list (see below).
         servings: Servings per recipe.
         notes: Free-text notes.
-        food_type: "RECIPE" (default) or "MEAL".
+        food_type: "RECIPE" (default) or "MEAL". A meal, like the web
+                   app's Custom Meals, has only a name and items: servings,
+                   notes, cooked_weight_g and the Advanced Info fields are
+                   recipe-only.
         cooked_weight_g: Optional Cooked Recipe Weight: the finished weight
                          after cooking (e.g. moisture loss). It replaces the
                          ingredient total as the recipe's weight, so per-gram
@@ -2069,6 +2090,7 @@ def edit_custom_recipe(
     translations: dict[str, str | None] | None = None,
 ) -> str:
     """Edit a custom recipe or meal. Omitted fields are left unchanged.
+    For a meal only name and ingredients apply (its items).
 
     If the recipe is already logged in the diary or used in other recipes or
     meals, this returns status "needs_decision" with the usage counts and

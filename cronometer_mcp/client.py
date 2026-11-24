@@ -1481,6 +1481,17 @@ class CronometerClient:
             "grams": round(grams_logged, 2) if grams_logged is not None else None,
         }
 
+    def explode_serving(self, serving_id: str) -> None:
+        """Replace a logged recipe or meal with one diary entry per item, as
+        the Diary's "Explode" menu item does (explodeRecipe)."""
+        self.authenticate()
+        body = gwt_foods.encode_request(self.gwt_header, "explodeRecipe", [
+            (gwt_foods.STRING, self.nonce), ("I", int(self.user_id)), ("J", serving_id),
+        ])
+        raw = self._gwt_post(body)
+        if not raw.startswith("//OK"):
+            raise RuntimeError(f"explodeRecipe failed: {raw[:200]}")
+
     def remove_serving(self, serving_id: str) -> bool:
         """Remove a serving entry from the Cronometer diary.
 
@@ -2901,6 +2912,10 @@ class CronometerClient:
         """
         if food_type.upper() not in cf.RECIPE_TYPES:
             raise ValueError("food_type must be RECIPE or MEAL")
+        if food_type.upper() == "MEAL":
+            _check_meal_fields(servings=None if servings == 1 else servings,
+                               notes=notes or None, cooked_weight_g=cooked_weight_g,
+                               **(advanced or {}))
         if not ingredients:
             raise ValueError("a recipe needs at least one ingredient")
         self.authenticate()
@@ -2931,6 +2946,9 @@ class CronometerClient:
         food = self._get_food_raw(food_id)
         if not cf.is_recipe(food):
             raise ValueError(f"{food_id} is a {cf.food_type(food)}, not a recipe or meal")
+        if cf.food_type(food) == "MEAL":
+            _check_meal_fields(servings=servings, notes=notes or None,
+                               cooked_weight_g=cooked_weight_g, **(advanced or {}))
         if name is not None:
             cf.set_food_name(food, name)
         if notes is not None:
@@ -3213,6 +3231,14 @@ class CronometerClient:
         # Success: //OK[1,2,1,["...ResponseEvent...","Success"],0,7]
         if "Success" not in raw:
             raise RuntimeError(f"updateDailyTargetTemplate failed: {raw[:300]}")
+
+
+def _check_meal_fields(**fields) -> None:
+    """Meals have only a name and items, as in the web app's meal editor."""
+    bad = [k for k, v in fields.items() if v is not None]
+    if bad:
+        raise ValueError(f"meals don't have {', '.join(bad)} (only a name and items); "
+                         "use a recipe for those")
 
 
 def copy_for_new(food: dict) -> dict:

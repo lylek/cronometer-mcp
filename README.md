@@ -172,6 +172,7 @@ the credentials themselves keep full access.
 | `get_food_details` | Get a food's serving sizes: measure IDs and gram weights |
 | `add_food_entry` | Log a food, recipe or meal by grams, or by quantity of a serving size ("6.5 oz", "1 full recipe", "0.5 capsule"), stored as the website does |
 | `remove_food_entry` | Remove a food entry from the diary |
+| `explode_diary_entry` | Replace a logged meal or recipe with one diary entry per item, like the Diary's "Explode" |
 | `get_diary_order` | A day's entries (foods, exercises, biometrics, notes) group by group, in display order, with entry ids |
 | `reorder_diary_entries` | Rearrange a diary group's entries, or move entries into it from another group |
 | `copy_day` | Copy all diary entries from one date to another |
@@ -183,7 +184,7 @@ the credentials themselves keep full access.
 |------|-------------|
 | `list_custom_foods` | List your custom foods, recipes and meals (filter by type or name) |
 | `get_custom_food` | Show nutrients, serving sizes, ingredients (expanding nested recipes) and Advanced Info: category, tags, barcodes, translations |
-| `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients. Can set cooked weight, category, tags, barcodes and translations |
+| `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients. Can set cooked weight, category, tags, barcodes and translations (recipes only: a meal, as on the website, has just a name and items) |
 | `edit_custom_recipe` | Rename, change servings/notes/cooked weight/category/tags/barcodes/translations, or replace a recipe's or meal's ingredients |
 | `reorder_recipe_ingredients` | Put a recipe's or meal's ingredients in a new order (the website only adds at the end) |
 | `edit_custom_food` | Change a custom food's name, notes, nutrients, serving sizes, category, tags, barcodes or translations |

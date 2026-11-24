@@ -518,11 +518,21 @@ def summarize_food(food: dict, children: dict[int, dict], depth: int,
             out["nutrients_per_100g"] = summarize_nutrients(values, 1.0, all_nutrients)
     else:
         out["nutrients_per_100g"] = summarize_nutrients(values, 1.0, all_nutrients)
+    if ftype == "MEAL":
+        # The web app's meal editor has only a name and items: no servings,
+        # cooked weight, notes or Advanced Info.
+        for k in ("servings", "cooked_weight_g", "original_weight_g", "nutrients_per_serving"):
+            out.pop(k, None)
+        if "nutrients_whole_recipe" in out:
+            out["nutrients_whole_meal"] = out.pop("nutrients_whole_recipe")
+        if not out["notes"]:
+            out.pop("notes")
     out["measures"] = describe_measures(food)
-    out["category"] = category_name(food)
-    out["tags"] = tag_names(food)
-    out["barcodes"] = barcodes(food)
-    out["translations"] = translations(food)
+    if ftype != "MEAL":
+        out["category"] = category_name(food)
+        out["tags"] = tag_names(food)
+        out["barcodes"] = barcodes(food)
+        out["translations"] = translations(food)
     if ftype in RECIPE_TYPES or items(food.get("ingredients")):
         out["ingredients"] = [
             summarize_ingredient(ing, children, depth, all_nutrients)
@@ -657,7 +667,15 @@ def food_measure(name: str, quantity: float, grams: float, food_id: int) -> dict
 
 def new_recipe(name: str, owner: int, ftype: str = "RECIPE", servings: float = 1.0,
                notes: str = "") -> dict:
-    """A blank recipe or meal shaped like the web app's "Create Recipe" save."""
+    """A blank recipe or meal shaped like the web app's "Create Recipe" /
+    "Create Meal" save. A meal has only the "full recipe" measure and no
+    recipe settings; the server adds the "g" measure for both."""
+    if ftype == "MEAL":
+        food = new_recipe(name, owner, "RECIPE", 1.0, notes)
+        food["food_type"] = g.enum(g.FOOD_TYPE, "MEAL")
+        food["measures"]["measures"]["items"] = [recipe_measure("full recipe", 1.0)]
+        food["properties"]["entries"] = []
+        return food
     return {
         "$class": g.FOOD, "unknown_0": 0, "unknown_1": False,
         "barcodes": {"$class": g.ARRAY_LIST, "items": []},

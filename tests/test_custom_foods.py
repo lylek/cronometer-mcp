@@ -399,3 +399,42 @@ class TestAdvancedInfo:
         out = c.edit_custom_food(9, advanced=dict(barcodes=None, category="Snacks",
                                                   tags=["Brand"], translations=None))
         assert out["category"] == "Snacks" and out["tags"] == ["Brand"]
+
+
+class TestMeals:
+    def test_new_meal_matches_web_create_meal(self):
+        m = cf.new_recipe("Lunch", 5, "MEAL")
+        assert cf.food_type(m) == "MEAL"
+        assert [x["name"] for x in cf.measures(m)] == ["full recipe"]
+        assert m["properties"]["entries"] == []
+        assert m["label_type"].ordinal == 1  # web default: American 2016
+
+    def test_meal_summary_has_no_recipe_only_fields(self):
+        m = cf.new_recipe("Lunch", 5, "MEAL")
+        s = cf.summarize_food(m, {}, 0)
+        for k in ("servings", "cooked_weight_g", "original_weight_g", "nutrients_per_serving",
+                  "notes", "category", "tags", "barcodes", "translations"):
+            assert k not in s, k
+
+    def test_create_meal_rejects_recipe_fields(self):
+        c = CronometerClient.__new__(CronometerClient)
+        with pytest.raises(ValueError, match="servings"):
+            c.create_recipe("M", [{"food_source_id": 1, "grams": 1}], servings=2, food_type="MEAL")
+        with pytest.raises(ValueError, match="category"):
+            c.create_recipe("M", [{"food_source_id": 1, "grams": 1}], food_type="MEAL",
+                            advanced=dict(category="Sweets"))
+
+    def test_edit_meal_rejects_recipe_fields(self):
+        c = CronometerClient.__new__(CronometerClient)
+        raw = cf.new_recipe("M", 5, "MEAL")
+        c._get_food_raw = MagicMock(return_value=raw)
+        with pytest.raises(ValueError, match="cooked_weight_g"):
+            c.edit_recipe(1, cooked_weight_g=500)
+        with pytest.raises(ValueError, match="notes"):
+            c.edit_recipe(1, notes="hi")
+
+
+def test_encode_long_param():
+    body = g.encode_request("H", "explodeRecipe", [(g.STRING, "n"), ("I", 7), ("J", "D80lp$")])
+    assert body.endswith("|D80lp$|")
+    assert g.encode_request("H", "m", [("J", 64)]).endswith("|BA|")
