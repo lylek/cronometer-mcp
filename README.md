@@ -157,11 +157,17 @@ the credentials themselves keep full access.
 
 ### Food Log & Nutrition
 
+`get_diary` and `get_diary_nutrition` read the diary live, as the Diary page does. The
+other tools here read Cronometer's CSV export, which is rationed per account (HTTP 429 for
+hours once exceeded) and has no entry ids.
+
 | Tool | Description |
 |------|-------------|
-| `get_food_log` | Individual food entries with macros + micros for a date range |
-| `get_daily_nutrition` | Daily macro totals (calories, protein, carbs, fat, fiber) |
-| `get_micronutrients` | Detailed vitamin/mineral breakdown with period averages |
+| `get_diary` | Every food, exercise, biometric and note for a date range, in display order, with the ids other tools take (serving, food, note, biometric), amounts and nutrients, plus daily totals |
+| `get_diary_nutrition` | Daily totals of the 60 nutrients Cronometer reports (or any you name), with averages over the days with food logged |
+| `get_food_log` | Individual food entries with macros + micros for a date range (CSV export) |
+| `get_daily_nutrition` | Daily macro totals (calories, protein, carbs, fat, fiber) (CSV export) |
+| `get_micronutrients` | Detailed vitamin/mineral breakdown with period averages (CSV export) |
 | `export_raw_csv` | Raw CSV export for any data type (servings, exercises, biometrics, etc.) |
 
 ### Food Search & Diary Management

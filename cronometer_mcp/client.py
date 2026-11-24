@@ -3247,6 +3247,41 @@ class CronometerClient:
                 out.append(diary.summarize_biometric(e, metrics))
         return out
 
+    def get_diary(self, start: date | None = None, end: date | None = None,
+                  nutrient_ids: set[int] | None = None) -> list[dict]:
+        """The diary as the Diary page shows it, read live (getDayInfo), not
+        from the rationed CSV export. Per day: every entry (foods, exercises,
+        biometrics, notes) in display order with its ids, and the day's food
+        nutrient totals. ``nutrient_ids`` picks the nutrients; None = all."""
+        days = self._days(start, end)
+        infos = {d: diary.entries(self.get_day_info(d)) for d in days}
+        foods = self.get_foods_raw(sorted({e["food_id"] for es in infos.values() for e in es
+                                           if gwt_foods.short_class(e) == "Serving"}))
+        metrics = self.get_metrics() if any("Biometric" in gwt_foods.short_class(e)
+                                            for es in infos.values() for e in es) else {}
+        groups = {g["wire_index"]: g["name"] for g in self.diary_groups}
+        user_id = int(self.user_id)
+        out = []
+        for d in days:
+            ordered = sorted(infos[d], key=lambda e: e.get("order") or 0)
+            out.append({
+                "date": d.isoformat(),
+                "entries": [diary.summarize_entry(e, foods, metrics, groups, user_id, nutrient_ids)
+                            for e in ordered],
+                "totals": diary.pick_nutrients(diary.food_totals(ordered, foods), nutrient_ids),
+            })
+        return out
+
+    def get_diary_nutrition(self, start: date | None = None, end: date | None = None,
+                            nutrient_ids: set[int] | None = None) -> list[dict]:
+        """Each day's consumed nutrient totals, read live from the diary."""
+        days = self._days(start, end)
+        infos = {d: diary.entries(self.get_day_info(d), "Serving") for d in days}
+        foods = self.get_foods_raw(sorted({e["food_id"] for es in infos.values() for e in es}))
+        return [{"date": d.isoformat(), "foods_logged": len(infos[d]),
+                 "totals": diary.pick_nutrients(diary.food_totals(infos[d], foods), nutrient_ids)}
+                for d in days]
+
     def get_energy_expenditure(self, start: date | None = None, end: date | None = None) -> dict:
         """The Diary page's Energy Expenditure breakdown, per day."""
         days = self._days(start, end)

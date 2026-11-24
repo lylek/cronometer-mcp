@@ -21,6 +21,7 @@ from datetime import date
 
 from . import custom_foods as cf
 from . import gwt_foods as g
+from . import nutrients as nu
 
 # Pseudo-nutrient ids the web client uses in a day's totals.
 EXERCISE_KCAL = -208  # non-tracker exercise calories (negative = burned)
@@ -459,3 +460,103 @@ def energy_expenditure(totals: dict[int, float], user: dict, day: date) -> dict:
         },
         "exercise_minutes": round(minutes, 1),
     }
+
+
+# --- the diary as read by get_diary -------------------------------------------
+
+# get_diary's default nutrients: energy and the macros.
+MACRO_IDS = (208, 203, 205, -1205, 291, 269, 204, 606)
+
+# The nutrients Cronometer's daily summary export reports, in its column
+# order. Some foods carry others (sucrose, energy in kJ...) that the site
+# doesn't total; those are available by asking for them.
+REPORT_IDS = (
+    208, 221, 262, 10012, 246, 255, 404, 405, 406, 410, 415, 418, 417, 320, 401,
+    324, 323, 430, 301, 312, 303, 304, 315, 305, 306, 317, 307, 309, -1205, 205,
+    291, 297, 295, 209, 269, 204, 601, 645, 646, 606, 605, 10001, 851, 621, 629,
+    10002, 853, 675, 507, 512, 503, 504, 505, 506, 508, 203, 502, 501, 509, 510,
+)
+_REPORT_RANK = {nid: i for i, nid in enumerate(REPORT_IDS)}
+
+
+def nutrient_label(nid: int) -> str:
+    """A nutrient's column name in Cronometer's exports, e.g. "Energy (kcal)"."""
+    unit = nu.unit(nid)
+    return f"{nu.name(nid)} ({unit})" if unit else nu.name(nid)
+
+
+def serving_nutrients(serving: dict, food: dict | None) -> dict[int, float]:
+    """Every nutrient in one logged serving, by nutrient id."""
+    if food is None:
+        return {}
+    return {nid: serving_nutrient(food, serving["amount"], serving["measure_id"], v)
+            for nid, v in cf.nutrient_values(food).items()}
+
+
+def pick_nutrients(values: dict[int, float], ids: set[int] | None) -> dict[str, float]:
+    """The nonzero nutrients in ``ids`` (None = REPORT_IDS) by label, rounded
+    like the exports (2 places), in the exports' column order."""
+    wanted = set(REPORT_IDS) if ids is None else ids
+    out = {}
+    for nid in sorted(values, key=lambda n: (_REPORT_RANK.get(n, len(REPORT_IDS)), n)):
+        if nid not in wanted or nid not in nu.NUTRIENTS:
+            continue
+        v = round(values[nid], 2)
+        if v:
+            out[nutrient_label(nid)] = v
+    return out
+
+
+def summarize_serving(s: dict, food: dict | None, user_id: int) -> dict:
+    """A logged food, recipe or meal, with the ids the other tools take."""
+    grams, _, measure, qty = cf.ingredient_contribution(s, food)
+    return {
+        "serving_id": s["id"],
+        "food_source_id": s["food_id"],
+        "name": cf.food_name(food) if food else None,
+        "food_type": cf.food_type(food) if food else None,
+        "custom": food.get("owner") == user_id if food else None,
+        "quantity": round(qty, 3) if qty is not None else None,
+        "measure": measure,
+        "grams": round(grams, 2) if grams is not None else None,
+    }
+
+
+def summarize_entry(e: dict, foods: dict[int, dict], metrics: dict[int, dict],
+                    group_names: dict[int, str], user_id: int,
+                    nutrient_ids: set[int] | None) -> dict:
+    """One diary entry of any kind, as get_diary lists it."""
+    kind = g.short_class(e)
+    grp = diary_group(e)
+    # entry_id is the id reorder_diary_entries takes; each kind also gets it
+    # under the name its own tools use (serving_id, note_id, biometric_id).
+    head = {"kind": None, "entry_id": e["id"], "diary_group": group_names.get(grp, grp),
+            "position": _position(e), "time": fmt_time(e.get("time"))}
+    if kind == "Serving":
+        food = foods.get(e["food_id"])
+        out = {**head, "kind": "food", **summarize_serving(e, food, user_id)}
+        out["nutrients"] = pick_nutrients(serving_nutrients(e, food), nutrient_ids)
+        return out
+    if kind == "Note":
+        return {**head, "kind": "note", "note_id": e["id"], "text": e.get("text")}
+    if kind == "Exercise":
+        ex = summarize_exercise(e, group_names)
+        rest = {k: v for k, v in ex.items()
+                if k not in ("date", "time", "diary_group", "entry_id", "kind")}
+        return {**head, "kind": "exercise",
+                "tracker_activity": ex["kind"] == "tracker_activity", **rest}
+    if "Biometric" in kind:
+        b = summarize_biometric(e, metrics)
+        return {**head, "kind": "biometric", "biometric_id": e["id"],
+                **{k: v for k, v in b.items() if k not in ("date", "time", "entry_id")}}
+    return {**head, "kind": kind}
+
+
+def food_totals(day_entries: list[dict], foods: dict[int, dict]) -> dict[int, float]:
+    """A day's consumed nutrients (foods only), by nutrient id."""
+    totals: dict[int, float] = {}
+    for e in day_entries:
+        if g.short_class(e) == "Serving":
+            for nid, v in serving_nutrients(e, foods.get(e["food_id"])).items():
+                totals[nid] = totals.get(nid, 0.0) + v
+    return totals

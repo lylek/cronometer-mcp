@@ -149,6 +149,98 @@ def _format_servings(rows: list[dict]) -> list[dict]:
     return formatted
 
 
+def _nutrient_ids(nutrients: str | list[str | int] | None, default: str) -> set[int] | None:
+    """A get_diary nutrients argument -> nutrient ids (None = all)."""
+    from . import diary, nutrients as nu
+    choice = default if nutrients is None else nutrients
+    if isinstance(choice, str):
+        key = choice.strip().lower()
+        if key == "all":
+            return None
+        if key == "macros":
+            return set(diary.MACRO_IDS)
+        choice = [part for part in choice.split(",") if part.strip()]
+    return {nu.resolve(str(k).strip(), prefer=set(diary.MACRO_IDS)) for k in choice}
+
+
+def _split_nutrients(values: dict[str, float]) -> dict[str, dict[str, float]]:
+    """Nutrient labels grouped as the export-based tools group them."""
+    out: dict[str, dict[str, float]] = {"macros": {}, "amino_acids": {}, "micros": {}}
+    names = {"macro": "macros", "amino": "amino_acids", "micro": "micros"}
+    for label, v in values.items():
+        out[names[_classify_column(label)]][label] = v
+    return {k: v for k, v in out.items() if v}
+
+
+@_tool
+def get_diary(start_date: str | None = None, end_date: str | None = None,
+              nutrients: str | list[str] | None = None) -> str:
+    """The diary as the Diary page shows it, read live from Cronometer: every
+    food, exercise, biometric and note, group by group in display order, with
+    the ids other tools take, and each day's nutrient totals. Prefer this to
+    get_food_log: it is current, has ids, and doesn't use the rationed CSV
+    export.
+
+    Foods include serving_id (remove_food_entry, explode_diary_entry),
+    food_source_id (get_food_details, add_food_entry; get_custom_food when
+    custom is true), food_type (FOOD, RECIPE or MEAL), quantity, measure,
+    grams and nutrients. Every entry has entry_id (reorder_diary_entries);
+    notes have note_id and biometrics biometric_id.
+
+    Args:
+        start_date: YYYY-MM-DD (default today).
+        end_date: YYYY-MM-DD (default start_date); up to 62 days.
+        nutrients: "macros" (default: energy, protein, carbs, net carbs,
+            fiber, sugars, fat, saturated fat), "all" (the 60 nutrients
+            Cronometer's reports total), or a list of names or ids
+            ("Vitamin D", "sodium", 208).
+    """
+    try:
+        ids = _nutrient_ids(nutrients, "macros")
+        start = _parse_date(start_date) or date.today()
+        end = _parse_date(end_date) or start
+        days = _get_client().get_diary(start, end, ids)
+        return json.dumps({"status": "success", "days": days}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_tool
+def get_diary_nutrition(start_date: str | None = None, end_date: str | None = None,
+                        nutrients: str | list[str] | None = None) -> str:
+    """Daily nutrient totals (macros, amino acids, vitamins and minerals),
+    computed live from the diary like the Diary page, with averages over the
+    days that have food logged. Prefer this to get_daily_nutrition and
+    get_micronutrients: it is current and doesn't use the rationed CSV export.
+
+    Args:
+        start_date: YYYY-MM-DD (default 6 days before end_date).
+        end_date: YYYY-MM-DD (default today); up to 62 days.
+        nutrients: "all" (default: the 60 nutrients Cronometer's reports
+            total), "macros", or a list of names or ids ("Vitamin D", 208).
+    """
+    try:
+        ids = _nutrient_ids(nutrients, "all")
+        end = _parse_date(end_date) or date.today()
+        start = _parse_date(start_date) or (end - timedelta(days=6))
+        days = _get_client().get_diary_nutrition(start, end, ids)
+        logged = [d for d in days if d["foods_logged"]]
+        sums: dict[str, float] = {}
+        for d in logged:
+            for k, v in d["totals"].items():
+                sums[k] = sums.get(k, 0.0) + v
+        averages = {k: round(v / len(logged), 2) for k, v in sums.items()} if logged else {}
+        return json.dumps({
+            "status": "success",
+            "date_range": {"start": str(start), "end": str(end)},
+            "days": [{"date": d["date"], "foods_logged": d["foods_logged"],
+                      **_split_nutrients(d["totals"])} for d in days],
+            "averages": {"days_with_food": len(logged), **_split_nutrients(averages)},
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
 @_tool
 def get_food_log(
     start_date: str | None = None,
@@ -156,8 +248,8 @@ def get_food_log(
 ) -> str:
     """Get detailed food log with individual food entries and full nutrition.
 
-    Returns every food entry with macros and micronutrients.
-    Great for analyzing what was eaten and spotting nutrient gaps.
+    Legacy: reads Cronometer's CSV export, which is rationed (HTTP 429 for
+    hours once exceeded) and has no ids. Prefer get_diary.
 
     Args:
         start_date: Start date as YYYY-MM-DD (defaults to today).
@@ -214,6 +306,8 @@ def get_daily_nutrition(
     """Get daily nutrition summary with macro totals per day.
 
     Returns calorie, protein, carb, fat, and fiber totals for each day.
+    Legacy: reads Cronometer's CSV export, which is rationed (HTTP 429 for
+    hours once exceeded). Prefer get_diary_nutrition.
     Use this for quick daily overviews and trend analysis.
 
     Args:
@@ -255,6 +349,8 @@ def get_micronutrients(
 
     Shows vitamins, minerals, and other micronutrients per day with
     period averages. Use this to identify nutrient gaps and plan meals.
+    Legacy: reads Cronometer's CSV export, which is rationed (HTTP 429 for
+    hours once exceeded). Prefer get_diary_nutrition.
 
     Args:
         start_date: Start date as YYYY-MM-DD (defaults to 7 days ago).
@@ -1278,6 +1374,8 @@ def sync_cronometer(
 
     Downloads servings and daily summary data, saves JSON exports,
     and regenerates food-log.md.
+    Uses Cronometer's CSV export, which is rationed (HTTP 429 for hours once
+    exceeded); to read the diary, use get_diary or get_diary_nutrition.
 
     Output directory defaults to ~/.local/share/cronometer-mcp/ but can
     be overridden with the CRONOMETER_DATA_DIR environment variable.
