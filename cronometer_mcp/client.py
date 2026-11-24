@@ -42,13 +42,6 @@ FOOD_SEARCH_URL = "https://cronometer.com/api/v3/user/{user_id}/food-search/stri
 GWT_NOCACHE_JS_URL = "https://cronometer.com/cronometer/cronometer.nocache.js"
 GWT_CACHE_JS_URL = "https://cronometer.com/cronometer/{permutation}.cache.js"
 
-# NCCDB "universal" measure_id that works for any food in updateDiary.
-# CRDB foods have food-specific measure_ids in their getFood response,
-# but those IDs cause "ghost entries" (counted but invisible in diary).
-# Using an NCCDB measure_id (here: eggs' "mL chopped" measure) with the
-# correct weight_grams produces working entries for ALL food sources.
-UNIVERSAL_MEASURE_ID = 124399
-
 # Cronometer Gold exposes 8 diary group slots, settings keys DG01-DG08.
 # Cronometer has a public request open to raise this; derive ranges from
 # what is actually parsed rather than hardcoding 8 in more places.
@@ -89,21 +82,6 @@ GWT_FIND_FOODS = (
     "Z|{nonce}|{query}|"
     "com.cronometer.shared.foods.FoodSource/4236433762|"
     "1|2|3|4|8|5|5|6|7|6|5|8|9|10|11|{max_results}|7|1|12|0|0|0|8|0|0|"
-)
-
-GWT_UPDATE_DIARY = (
-    "7|0|12|https://cronometer.com/cronometer/|"
-    "{gwt_header}|"
-    "com.cronometer.shared.rpc.CronometerService|"
-    "updateDiary|java.lang.String/2004016611|"
-    "I|java.util.List|{nonce}|"
-    "java.util.Collections$SingletonList/1586180994|"
-    "com.cronometer.shared.entries.changes.AddEntryChange/3949104564|"
-    "com.cronometer.shared.entries.models.Serving/2895043750|"
-    "com.cronometer.shared.entries.models.Day/782579793|"
-    "1|2|3|4|3|5|6|7|8|{user_id}|9|10|1|1|11|12|"
-    "{day}|{month}|{year}|{quantity}|{diary_group}|0|{measure_id}|0|0|"
-    "{weight_grams}|{food_source_id}|A|{food_id}|0|"
 )
 
 GWT_REMOVE_SERVING = (
@@ -1420,99 +1398,67 @@ class CronometerClient:
 
     def add_serving(
         self,
-        food_id: int,
         food_source_id: int,
-        measure_id: int,
-        quantity: float,
-        weight_grams: float,
         day: date,
         diary_group: int = 1,
+        grams: float | None = None,
+        quantity: float | None = None,
+        measure: int | str | None = None,
     ) -> dict:
-        """Add a food serving to the Cronometer diary.
+        """Log a food, recipe or meal to the diary, as the web app does.
 
-        Args:
-            food_id: Numeric food ID from Cronometer's food database.
-            food_source_id: Food source ID (identifies the database the food
-                           comes from, e.g. USDA, custom).
-            measure_id: Measure/unit ID. Pass 0 to auto-select
-                        UNIVERSAL_MEASURE_ID (124399). The diary_group is
-                        encoded into the high 16 bits automatically.
-            quantity: Serving quantity. When using UNIVERSAL_MEASURE_ID, set
-                      this equal to weight_grams (since the measure is g-based).
-            weight_grams: Weight of the serving in grams.
-            day: Calendar date to log the entry against.
-            diary_group: Meal slot — 1=Breakfast, 2=Lunch, 3=Dinner, 4=Snacks.
+        Give ``grams``, or ``quantity`` with an optional ``measure`` (a
+        measure_id or name from get_custom_food). Without a measure, grams
+        use the food's "g"; a quantity counts "full recipe" for recipes and
+        meals and the food's default serving size otherwise. Amounts are
+        stored like recipe ingredients (custom_foods.build_ingredient).
 
-        Returns:
-            Dict with keys:
-                - serving_id (str): Opaque diary entry identifier (e.g. "D80lp$").
-                - food_id (int): Echo of the food_id argument.
-                - food_source_id (int): Echo of the food_source_id argument.
+        Returns the new entry's serving_id and a description of what was
+        logged.
         """
-        self.authenticate()
+        if (grams is None) == (quantity is None):
+            raise ValueError("give grams, or quantity (with an optional measure)")
+        food = self._get_food_raw(food_source_id)
+        if quantity is not None and measure is None and not cf.is_recipe(food):
+            default = food["measures"]["default_measure_id"]
+            measure = default if any(m["id"] == default for m in cf.measures(food)) else None
+        spec = {"grams": grams, "quantity": quantity, "measure": measure}
+        ing = cf.build_ingredient({k: v for k, v in spec.items() if v is not None}, food)
+        m = next((x for x in cf.measures(food) if x["id"] == ing["measure_id"]), None)
 
-        if measure_id == 0:
-            measure_id = UNIVERSAL_MEASURE_ID
-
-        # Encode diary_group into the measure_id's high 16 bits.
-        # The Cronometer server reads the diary group from this encoding:
-        #   1=Breakfast, 2=Lunch, 3=Dinner, 4=Snacks.
-        # Strip any existing group from the high bits, then apply the requested one.
-        measure_base = measure_id & 0xFFFF
-        encoded_measure = (diary_group << 16) | measure_base
-
-        # Cronometer sends integer quantities without a decimal point
-        quantity_str = str(int(quantity)) if quantity == int(quantity) else str(quantity)
-        weight_str = str(int(weight_grams)) if weight_grams == int(weight_grams) else str(weight_grams)
-
-        body = (
-            GWT_UPDATE_DIARY
-            .replace("{gwt_header}", self.gwt_header)
-            .replace("{nonce}", self.nonce or "")
-            .replace("{user_id}", self.user_id or "")
-            .replace("{day}", str(day.day))
-            .replace("{month}", str(day.month))
-            .replace("{year}", str(day.year))
-            .replace("{quantity}", quantity_str)
-            .replace("{diary_group}", str(diary_group))
-            .replace("{measure_id}", str(encoded_measure))
-            .replace("{weight_grams}", weight_str)
-            .replace("{food_source_id}", str(food_source_id))
-            .replace("{food_id}", str(food_id))
-        )
-
+        # Append to the end of the group, as the web app does.
+        current = diary.group_layout(self.get_day_info(day)).get(diary_group, [])
+        position = max(((e.get("order") or 0) & 0xFFFF for e in current), default=0) + 1
+        serving = {
+            "$class": gwt_foods.SERVING, "day": diary.day_obj(day),
+            "unknown_1": True, "unknown_2": True, "tz_offset": None,
+            "order": (diary_group << 16) | position, "time": None,
+            "owner": int(self.user_id), "amount": ing["amount"],
+            "food_id": int(food["id"]), "id": "A",
+            "measure_id": ing["measure_id"], "unknown_11": 0,
+        }
+        change = {"$class": gwt_foods.SINGLETON_LIST, "item": {
+            "$class": gwt_foods.ADD_ENTRY_CHANGE,
+            "unknown_0": True, "unknown_1": True, "entry": serving}}
+        body = gwt_foods.encode_request(self.gwt_header, "updateDiary", [
+            (gwt_foods.STRING, self.nonce), ("I", int(self.user_id)),
+            ("java.util.List", change),
+        ])
         raw = self._gwt_post(body)
+        # The result echoes the saved Serving, last field first:
+        # //OK[0,<measure_id>,"<serving id>",<food id>,<amount>,...]
+        found = re.match(r'//OK\[-?\d+,-?\d+,"([^"]+)",(\d+),', raw)
+        if not found:
+            raise RuntimeError(f"updateDiary returned unexpected response: {raw[:300]}")
 
-        # Response format (example, live since 2026-10-30, issue #13):
-        # //OK[0,1072101,"FAoVo9",464674,50.0,2107848,0,321007,0,1,1,2026,10,30,
-        #      4,3,2,1,1,["java.util.ArrayList/...","com.cronometer..."],0,7]
-        # Positional layout (0-indexed from the inner array start):
-        #   index 2 → serving_id (quoted string)
-        #   index 1 → food_id
-        #   index 3 → food_source_id
-        inner_match = re.search(r"//OK\[(.+),\d+,7\]$", raw, re.DOTALL)
-        if not inner_match:
-            raise RuntimeError(
-                f"Unexpected updateDiary response format: {raw[:300]}"
-            )
-
-        inner = inner_match.group(1)
-        # The response layout is:
-        #   0,{food_id},"{serving_id}",{food_source_id},{weight},... ,[string_table],0,7
-        # Match the first four meaningful fields directly from the full inner string.
-        fields_match = re.match(
-            r"\d+,(\d+),\"([^\"]+)\",(\d+),",
-            inner,
-        )
-        if not fields_match:
-            raise RuntimeError(
-                f"Could not parse updateDiary response fields: {inner[:200]}"
-            )
-
+        grams_logged, _, mname, qty = cf.ingredient_contribution(ing, food)
         return {
-            "serving_id": fields_match.group(2),
-            "food_id": int(fields_match.group(1)),
-            "food_source_id": int(fields_match.group(3)),
+            "serving_id": found.group(1),
+            "food_source_id": int(found.group(2)),
+            "name": cf.food_name(food),
+            "quantity": round(qty, 4) if qty is not None else None,
+            "measure": mname or (m["name"] if m else None),
+            "grams": round(grams_logged, 2) if grams_logged is not None else None,
         }
 
     def remove_serving(self, serving_id: str) -> bool:

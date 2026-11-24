@@ -77,10 +77,7 @@ def require_clean_day(servings_csv: str, biometrics_csv: str) -> None:
 def write_round_trips(c) -> None:
     """Add then remove one serving, then one biometric. Stops at the first failure."""
     food = c.find_foods("egg")[0]
-    added = c.add_serving(
-        food_id=food["food_id"], food_source_id=food["food_source_id"],
-        measure_id=0, quantity=50, weight_grams=50, day=TEST_DAY,
-    )
+    added = c.add_serving(food_source_id=food["food_source_id"], day=TEST_DAY, grams=50)
     assert added["serving_id"]
     assert c.remove_serving(added["serving_id"])
 

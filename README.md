@@ -166,8 +166,8 @@ the credentials themselves keep full access.
 |------|-------------|
 | `search_foods` | Search the Cronometer food database |
 | `list_diary_groups` | List this account's diary groups and the values `diary_group` accepts |
-| `get_food_details` | Get full nutrition info and serving measure IDs for a food |
-| `add_food_entry` | Add a food entry to the diary |
+| `get_food_details` | Get a food's serving sizes: measure IDs and gram weights |
+| `add_food_entry` | Log a food, recipe or meal by grams, or by quantity of a serving size ("6.5 oz", "1 full recipe", "0.5 capsule"), stored as the website does |
 | `remove_food_entry` | Remove a food entry from the diary |
 | `copy_day` | Copy all diary entries from one date to another |
 | `set_day_complete` | Mark a diary day as complete or incomplete |
@@ -227,7 +227,7 @@ Key parameter patterns:
   indices are rejected rather than silently defaulting — Cronometer itself
   accepts a bad index without complaint and the entry becomes unreachable.
 - `days_of_week` — `"all"`, `"weekdays"`, `"weekends"`, or comma-separated day numbers (`0`=Sun through `6`=Sat)
-- `measure_id` — pass `0` to use the universal gram-based measure (works for all food sources)
+- `add_food_entry` — give `weight_grams`, or `quantity` with an optional `measure` (serving size name or measure_id). A quantity without a measure means "full recipe" for recipes and meals and the default serving for foods
 - `target_date` — pass `"all"` on `get_macro_targets` to get the full weekly schedule
 
 ### Sync Output

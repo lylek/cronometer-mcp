@@ -108,7 +108,7 @@ def test_empty_scan_cannot_pass():
 def test_templates_found():
     """Offline: the scan sees the write templates, so a pass means something."""
     names = template_signatures()
-    assert "GWT_UPDATE_DIARY" in names
+    assert "GWT_REMOVE_SERVING" in names
     assert "GWT_FIND_FOODS" not in names
     assert gwt_foods.SERVING in names["gwt_foods"]
     assert gwt_foods.BIOMETRIC in names["gwt_foods"]

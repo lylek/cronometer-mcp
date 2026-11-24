@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 from cronometer_mcp import gwt_foods
 from datetime import date
 
-from cronometer_mcp.client import CronometerClient, EXPORT_TYPES, UNIVERSAL_MEASURE_ID
+from cronometer_mcp.client import CronometerClient, EXPORT_TYPES
 
 
 @pytest.fixture
@@ -887,139 +887,110 @@ class TestParseGetFood:
         assert result["food_source_id"] == 55985
 
 
-class TestAddServing:
-    """Tests for add_serving — universal measure fallback and response parsing."""
+def _measure(mid, name, quantity, weight, mtype=0):
+    return {"$class": gwt_foods.MEASURE, "quantity": quantity, "unknown_1": False,
+            "food_id": 0, "unknown_3": False, "id": mid, "unknown_5": None, "name": name,
+            "translations": {"$class": gwt_foods.HASH_MAP, "entries": []},
+            "measure_type": gwt_foods.GwtEnum(gwt_foods.MEASURE_TYPE, mtype), "weight": weight}
 
-    def _make_client(self):
+
+def _food(fid, ftype, measures, default=0):
+    return {"$class": gwt_foods.FOOD, "id": fid, "food_type": gwt_foods.enum(gwt_foods.FOOD_TYPE, ftype),
+            "measures": {"$class": gwt_foods.FOOD_MEASURES, "default_measure_id": default,
+                         "measures": {"$class": gwt_foods.ARRAY_LIST, "items": measures}},
+            "translations": {"$class": gwt_foods.ARRAY_LIST, "items": [
+                {"$class": gwt_foods.TRANSLATION, "language": None, "name": "Test food", "id": 0}]},
+            "nutrients": None}
+
+
+class TestAddServing:
+    """add_serving builds the Serving the way the web app does."""
+
+    RESPONSE = (
+        '//OK[0,1080756,"FHP9aa",451726,184.27,6979138,0,131074,0,1,1,2000,1,1,'
+        '4,3,2,1,1,["java.util.ArrayList/4159755760"],0,7]'
+    )
+
+    def _client(self, food):
         c = CronometerClient(username="test@x.com", password="pw")
         c._authenticated = True
         c.nonce = "n"
         c.user_id = "42"
+        c._get_food_raw = MagicMock(return_value=food)
+        c.get_day_info = MagicMock(return_value={"entries": None})
+        c._gwt_post = MagicMock(return_value=self.RESPONSE)
         return c
 
-    def _mock_update_response(self, serving_id="D9TEST", food_id=502518, fsid=55985):
-        # Live layout since issue #13: one leading field fewer than before.
-        return (
-            f'//OK[0,{food_id},"{serving_id}",{fsid},170.0,2107848,0,'
-            f'124399,0,1,1,2026,3,5,4,3,2,1,1,'
-            f'["java.util.ArrayList/4159755760"],0,7]'
-        )
+    def _orange(self):
+        return _food(451726, "FOOD", [_measure(1080756, "oz", 1.0, 28.3495231),
+                                      _measure(1003940, "medium", 1.0, 131.0),
+                                      _measure(5, "g", 1.0, 1.0)], default=1003940)
 
-    def test_universal_measure_fallback(self):
-        """measure_id=0 should auto-select UNIVERSAL_MEASURE_ID."""
-        c = self._make_client()
-        resp_text = self._mock_update_response()
-        c.session.post = MagicMock(
-            return_value=MagicMock(text=resp_text, raise_for_status=lambda: None)
-        )
+    def _meal(self):
+        return _food(88, "MEAL", [_measure(6, "g", 1.0, 390.0, 3), _measure(7, "full recipe", 1.0, 1.0, 3)])
 
-        result = c.add_serving(
-            food_id=502518, food_source_id=55985,
-            measure_id=0, quantity=170, weight_grams=170,
-            day=date(2026, 3, 5),
-        )
+    def _body(self, c):
+        body = c._gwt_post.call_args[0][0]
+        assert "updateDiary" in body and gwt_foods.ADD_ENTRY_CHANGE in body
+        return body
 
-        # Verify the GWT body uses UNIVERSAL_MEASURE_ID
-        call_body = c.session.post.call_args[1].get("data") or c.session.post.call_args[0][1]
-        assert str(UNIVERSAL_MEASURE_ID) in call_body
-        assert result["serving_id"] == "D9TEST"
+    def test_ounces_store_grams(self):
+        c = self._client(self._orange())
+        r = c.add_serving(451726, date(2000, 1, 1), 2, quantity=6.5, measure="oz")
+        # 6.5 oz is stored as 184.27 g with the oz measure, as the website does.
+        assert "|184.27190015|451726|A|1080756|0|" in self._body(c)
+        assert r["serving_id"] == "FHP9aa" and r["measure"] == "oz"
+        assert r["quantity"] == 6.5 and r["grams"] == 184.27
 
-    def test_explicit_measure_id_not_overridden(self):
-        """Non-zero measure_id should be used as-is."""
-        c = self._make_client()
-        resp_text = self._mock_update_response()
-        c.session.post = MagicMock(
-            return_value=MagicMock(text=resp_text, raise_for_status=lambda: None)
-        )
+    def test_grams_use_g_measure(self):
+        c = self._client(self._orange())
+        c.add_serving(451726, date(2000, 1, 1), 2, grams=150)
+        assert "|150|451726|A|5|0|" in self._body(c)
 
-        c.add_serving(
-            food_id=502518, food_source_id=55985,
-            measure_id=65541, quantity=4, weight_grams=200,
-            day=date(2026, 3, 5),
-        )
+    def test_quantity_alone_uses_default_serving(self):
+        c = self._client(self._orange())
+        c.add_serving(451726, date(2000, 1, 1), 2, quantity=1)
+        assert "|131|451726|A|1003940|0|" in self._body(c)
 
-        call_body = c.session.post.call_args[1].get("data") or c.session.post.call_args[0][1]
-        assert "|65541|" in call_body
+    def test_meal_quantity_is_full_recipes(self):
+        c = self._client(self._meal())
+        c.add_serving(88, date(2000, 1, 1), 1, quantity=1)
+        assert "|1|88|A|7|0|" in self._body(c)
 
-    def test_response_parsing(self):
-        c = self._make_client()
-        resp_text = self._mock_update_response(
-            serving_id="D9FRtZ", food_id=176206122, fsid=53718799
-        )
-        c.session.post = MagicMock(
-            return_value=MagicMock(text=resp_text, raise_for_status=lambda: None)
-        )
+    def test_meal_grams_count_the_g_measure(self):
+        # 390 g of a 390 g meal is one meal, not 390 of them.
+        c = self._client(self._meal())
+        r = c.add_serving(88, date(2000, 1, 1), 1, grams=390)
+        assert "|390|88|A|6|0|" in self._body(c)
+        assert r["grams"] == 390.0
 
-        result = c.add_serving(
-            food_id=176206122, food_source_id=53718799,
-            measure_id=0, quantity=14, weight_grams=14,
-            day=date(2026, 3, 5),
-        )
-        assert result["serving_id"] == "D9FRtZ"
-        assert result["food_id"] == 176206122
-        assert result["food_source_id"] == 53718799
+    def test_appends_to_end_of_group(self):
+        c = self._client(self._orange())
+        c.get_day_info.return_value = {"entries": {"items": [
+            {"$class": gwt_foods.SERVING, "order": (2 << 16) | 3},
+            {"$class": gwt_foods.SERVING, "order": (1 << 16) | 9},
+        ]}}
+        c.add_serving(451726, date(2000, 1, 1), 2, grams=10)
+        assert f"|{(2 << 16) | 4}|" in self._body(c)
 
-    def test_diary_group_in_body(self):
-        """diary_group should appear in the GWT body."""
-        c = self._make_client()
-        resp_text = self._mock_update_response()
-        c.session.post = MagicMock(
-            return_value=MagicMock(text=resp_text, raise_for_status=lambda: None)
-        )
+    def test_needs_exactly_one_amount(self):
+        c = self._client(self._orange())
+        with pytest.raises(ValueError):
+            c.add_serving(451726, date(2000, 1, 1), 2)
+        with pytest.raises(ValueError):
+            c.add_serving(451726, date(2000, 1, 1), 2, grams=1, quantity=1)
 
-        c.add_serving(
-            food_id=502518, food_source_id=55985,
-            measure_id=0, quantity=170, weight_grams=170,
-            day=date(2026, 3, 5), diary_group=2,
-        )
+    def test_unknown_measure(self):
+        c = self._client(self._orange())
+        with pytest.raises(ValueError, match="no measure"):
+            c.add_serving(451726, date(2000, 1, 1), 2, quantity=1, measure="cup")
 
-        call_body = c.session.post.call_args[1].get("data") or c.session.post.call_args[0][1]
-        # quantity|diary_group|0|measure_id pattern
-        assert "|2|0|" in call_body
-
-    def test_integer_quantity_no_decimal(self):
-        """Integer quantities should be sent without decimal point."""
-        c = self._make_client()
-        resp_text = self._mock_update_response()
-        c.session.post = MagicMock(
-            return_value=MagicMock(text=resp_text, raise_for_status=lambda: None)
-        )
-
-        c.add_serving(
-            food_id=502518, food_source_id=55985,
-            measure_id=0, quantity=170.0, weight_grams=170.0,
-            day=date(2026, 3, 5),
-        )
-
-        call_body = c.session.post.call_args[1].get("data") or c.session.post.call_args[0][1]
-        # Should contain "170|" not "170.0|"
-        assert "170|" in call_body
-
-    def test_serving_matches_live_serialization_policy(self):
-        """Serving uses the current type signature and field layout (issue #13).
-
-        Cronometer's Oct 2026 deploy changed Serving to signature 2895043750
-        and dropped its last serialized field: after the Day it writes
-        bool, bool, obj, int, obj, int, double, int, long, int, int.
-        """
-        c = self._make_client()
-        c.session.post = MagicMock(
-            return_value=MagicMock(
-                text=self._mock_update_response(), raise_for_status=lambda: None
-            )
-        )
-
-        c.add_serving(
-            food_id=1072101, food_source_id=464674,
-            measure_id=5, quantity=1, weight_grams=50,
-            day=date(2026, 3, 4), diary_group=1,
-        )
-
-        call_body = c.session.post.call_args[1].get("data") or c.session.post.call_args[0][1]
-        assert "com.cronometer.shared.entries.models.Serving/2895043750|" in call_body
-        assert call_body.endswith(
-            "|11|12|4|3|2026|1|1|0|65541|0|0|50|464674|A|1072101|0|"
-        )
+    def test_label_units_have_no_grams(self):
+        c = self._client(_food(3, "FOOD", [_measure(9, "capsule", 1.0, 100.0, 2)], default=9))
+        with pytest.raises(ValueError, match="no gram weight"):
+            c.add_serving(3, date(2000, 1, 1), 1, grams=1)
+        c.add_serving(3, date(2000, 1, 1), 1, quantity=0.5)
+        assert "|50|3|A|9|0|" in self._body(c)
 
 
 class TestRemoveServing:

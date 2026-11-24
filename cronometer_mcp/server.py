@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
+from . import custom_foods as cf
 from .client import _BIOMETRIC_TYPES, CronometerClient
 from .markdown import generate_food_log_md
 
@@ -469,7 +470,7 @@ def search_foods(query: str) -> str:
     """Search Cronometer's food database by name.
 
     Returns matching foods with their IDs and source information needed
-    to add a serving (food_id, food_source_id, measure_id).
+    to add a serving (food_source_id; food_id is its default serving size).
 
     Args:
         query: Food name or keyword to search for (e.g. "eggs", "chicken breast").
@@ -494,89 +495,96 @@ def search_foods(query: str) -> str:
 def get_food_details(food_source_id: int) -> str:
     """Get detailed food information including available serving measures.
 
-    Use this after search_foods to get the measure_id needed for add_food_entry.
-    Returns all available serving sizes with their numeric IDs and gram weights.
+    Use this after search_foods to pick a serving size for add_food_entry.
+    Returns every serving size with its measure_id and gram weight (null
+    for label units such as "tablet" that have no weight).
 
     Args:
         food_source_id: Food source ID from search_foods results.
     """
     try:
         client = _get_client()
-        result = client.get_food(food_source_id)
-        # Remove raw_response from the output to keep it clean
+        food = client._get_food_raw(food_source_id)
         output = {
             "status": "success",
-            "food_source_id": result["food_source_id"],
-            "measures": result["measures"],
+            "food_source_id": food_source_id,
+            "name": cf.food_name(food),
+            "default_measure_id": food["measures"]["default_measure_id"],
+            "measures": [
+                {"measure_id": m["measure_id"], "description": m["name"],
+                 "weight_grams": m["grams"]}
+                for m in cf.describe_measures(food)
+            ],
         }
-        return json.dumps(output, indent=2)
+        return json.dumps(output, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
 
 @_write_tool
 def add_food_entry(
-    food_id: int,
     food_source_id: int,
-    weight_grams: float,
     date: str,
-    measure_id: int = 0,
-    quantity: float = 0,
+    weight_grams: float | None = None,
+    quantity: float | None = None,
+    measure: str | int | None = None,
     diary_group: str | int | None = None,
+    measure_id: int | None = None,
+    food_id: int | None = None,
 ) -> str:
-    """Add a food entry to the Cronometer diary.
+    """Log a food, recipe or meal to the Cronometer diary, at the end of
+    its diary group.
 
-    Use search_foods to find food_id and food_source_id, then
-    get_food_details for measure_id and weight_grams.
-
-    For CRDB/custom foods, you can omit measure_id (defaults to a
-    universal NCCDB measure that works for all food sources).
-    When measure_id is omitted, quantity is set to weight_grams.
+    Give EITHER weight_grams OR quantity (with an optional measure):
+      - weight_grams=150: 150 g of it (recipes and meals too).
+      - quantity=1 for a recipe or meal: one "full recipe" (the whole meal).
+      - quantity=2, measure="serving": two of that serving size. Measure
+        names and ids are listed by get_custom_food (works for any food).
+      - quantity alone for a plain food: that many of its default serving.
 
     Args:
-        food_id: Numeric food ID from search_foods results.
-        food_source_id: Food source ID from search_foods results.
-        weight_grams: Weight of the serving in grams.
+        food_source_id: The food, recipe or meal (food_source_id from
+            search_foods or list_custom_foods).
         date: Date to log the entry as YYYY-MM-DD (e.g. "2026-03-04").
-        measure_id: Measure/unit ID. Pass 0 (default) to use the universal
-                    measure that works for all food sources.
-        quantity: Number of servings. Defaults to weight_grams when
-                  measure_id is 0 (universal gram-based measure).
+        weight_grams: Amount in grams.
+        quantity: Number of servings of ``measure``.
+        measure: Serving size name (e.g. "oz", "full recipe", "serving")
+            or measure_id.
         diary_group: Diary group name (case-insensitive) or 0-based index.
                      Names are user-configured and are not always
                      Breakfast/Lunch/Dinner/Snacks — call list_diary_groups to
                      see this account's groups. Defaults to a time-of-day
                      choice among enabled groups if omitted.
+        measure_id: Same as measure (kept for older callers); 0 = none.
+        food_id: Ignored; search_foods' food_id is not needed (kept so older
+            calls still work).
     """
     try:
         client = _get_client()
         group_int, group_err = _resolve_diary_group(client, diary_group)
         if group_err is not None:
             return json.dumps({"status": "error", "message": group_err})
-
-        if measure_id == 0 and quantity == 0:
-            quantity = weight_grams
-
+        if measure is None and measure_id:
+            measure = measure_id
+        if weight_grams is not None and quantity is not None:
+            if measure is None:
+                quantity = None  # old style: quantity echoed the grams
+            else:
+                weight_grams = None
         from datetime import date as date_type
-        log_date = date_type.fromisoformat(date)
-
         result = client.add_serving(
-            food_id=food_id,
             food_source_id=food_source_id,
-            measure_id=measure_id,
-            quantity=quantity,
-            weight_grams=weight_grams,
-            day=log_date,
+            day=date_type.fromisoformat(date),
             diary_group=group_int,
+            grams=weight_grams,
+            quantity=quantity,
+            measure=measure,
         )
         return json.dumps({
             "status": "success",
             "entry": result,
-            "note": (
-                "Use the serving_id to remove this entry with remove_food_entry "
-                "if needed."
-            ),
-        }, indent=2)
+            "note": "Use the serving_id to remove this entry with remove_food_entry if needed.",
+        }, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
