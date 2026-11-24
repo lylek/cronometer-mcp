@@ -182,11 +182,11 @@ the credentials themselves keep full access.
 | Tool | Description |
 |------|-------------|
 | `list_custom_foods` | List your custom foods, recipes and meals (filter by type or name) |
-| `get_custom_food` | Show nutrients, serving sizes and ingredients, expanding nested recipes |
-| `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients |
-| `edit_custom_recipe` | Rename, change servings/notes, or replace a recipe's or meal's ingredients |
+| `get_custom_food` | Show nutrients, serving sizes, ingredients (expanding nested recipes) and Advanced Info: category, tags, barcodes, translations |
+| `create_custom_recipe` | Create a recipe or meal from ingredients; Cronometer computes nutrients. Can set cooked weight, category, tags, barcodes and translations |
+| `edit_custom_recipe` | Rename, change servings/notes/cooked weight/category/tags/barcodes/translations, or replace a recipe's or meal's ingredients |
 | `reorder_recipe_ingredients` | Put a recipe's or meal's ingredients in a new order (the website only adds at the end) |
-| `edit_custom_food` | Change a custom food's name, notes, nutrients or serving sizes |
+| `edit_custom_food` | Change a custom food's name, notes, nutrients, serving sizes, category, tags, barcodes or translations |
 | `copy_custom_food` | Copy a food, recipe or meal to a new item with a new id |
 | `delete_custom_food` | Delete a custom food, recipe or meal |
 

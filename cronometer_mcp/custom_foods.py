@@ -107,6 +107,159 @@ def set_food_name(food: dict, name: str) -> None:
     ]}
 
 
+
+# ── Advanced Info: category, tags, barcodes, translations ───────────────
+
+# Food.unknown_3 holds the category id (0 = none), as in the web app's list.
+CATEGORIES = [
+    "Baby Foods", "Baked Products", "Beef Products", "Beverages",
+    "Breakfast Cereals", "Cereal Grains and Pasta", "Dairy and Egg Products",
+    "Ethnic Foods", "Fast Foods", "Fats and Oils",
+    "Finfish and Shellfish Products", "Fruits and Fruit Juices",
+    "Lamb, Veal, and Game Products", "Legumes and Legume Products",
+    "Meals, Entrees, and Sidedishes", "Nut and Seed Products", "Pork Products",
+    "Poultry Products", "Restaurant Foods", "Sausages and Luncheon Meats",
+    "Snacks", "Soups, Sauces, and Gravies", "Spices and Herbs", "Supplements",
+    "Sweets", "Vegetables and Vegetable Products",
+]
+
+# The tags the web app's food editor offers (FoodTag ordinals 0-8). Other
+# FoodTag values exist but only Cronometer sets them; they are kept as is.
+EDITABLE_TAGS = ["Whole", "Brand", "Restaurant", "Supplement", "Seafood",
+                 "Vegetarian", "Vegan", "Dairy", "Nuts"]
+
+# The languages the web app offers for translations.
+LANGUAGES = {
+    "en": ("English", "English", "us"),
+    "fr": ("French", "Fran\u00e7ais", "fr"),
+    "es": ("Spanish", "Espa\u00f1ol", "es"),
+    "de": ("German", "Deutsch", "de"),
+    "it": ("Italian", "Italiano", "it"),
+    "pl": ("Polish", "J\u0119zyk Polski", "pl"),
+    "pt": ("Portuguese", "Portugu\u00eas", "pt"),
+}
+
+
+def _language(code: str) -> dict:
+    name, native, flag = LANGUAGES[code]
+    return {"$class": g.LANGUAGE, "code": code, "name": name,
+            "flag_url": f"https://cdn1.cronometer.com/media/flags/{flag}.png",
+            "native_name": native}
+
+
+def category_name(food: dict) -> str | None:
+    cid = food.get("unknown_3") or 0
+    return CATEGORIES[cid - 1] if 1 <= cid <= len(CATEGORIES) else None
+
+
+def set_category(food: dict, category: str | int | None) -> None:
+    """Set the category by name (case-insensitive) or id; "" / 0 / None clears it."""
+    if category in (None, "", 0):
+        food["unknown_3"] = 0
+        return
+    if isinstance(category, int):
+        if not 1 <= category <= len(CATEGORIES):
+            raise ValueError(f"category id must be 1-{len(CATEGORIES)}")
+        food["unknown_3"] = category
+        return
+    want = str(category).strip().lower()
+    for i, name in enumerate(CATEGORIES, 1):
+        if name.lower() == want:
+            food["unknown_3"] = i
+            return
+    raise ValueError(f"unknown category {category!r}; choose one of: {', '.join(CATEGORIES)}")
+
+
+def tag_names(food: dict) -> list[str]:
+    return sorted((t.name or str(t.ordinal) for t in items(food.get("tags"))),
+                  key=lambda n: (n not in EDITABLE_TAGS,
+                                 EDITABLE_TAGS.index(n) if n in EDITABLE_TAGS else 0, n))
+
+
+def set_tags(food: dict, tags: list[str]) -> None:
+    """Replace the editable tags; tags only Cronometer sets are kept."""
+    lookup = {t.lower(): t for t in EDITABLE_TAGS}
+    chosen = []
+    for t in tags:
+        name = lookup.get(str(t).strip().lower())
+        if name is None:
+            raise ValueError(f"unknown tag {t!r}; choose from: {', '.join(EDITABLE_TAGS)}")
+        if name not in chosen:
+            chosen.append(name)
+    kept = [t for t in items(food.get("tags"))
+            if t.ordinal >= len(EDITABLE_TAGS)]
+    food["tags"] = {"$class": g.HASH_SET, "items": kept + [
+        g.GwtEnum(g.FOOD_TAG, EDITABLE_TAGS.index(n)) for n in chosen]}
+
+
+def barcodes(food: dict) -> list[str]:
+    return [str(b) for b in items(food.get("barcodes"))]
+
+
+def set_barcodes(food: dict, codes: list[str]) -> None:
+    clean = []
+    for c in codes:
+        c = str(c).strip()
+        if not c.isdigit():
+            raise ValueError(f"barcode {c!r} must be digits only (UPC/EAN)")
+        if c not in clean:
+            clean.append(c)
+    food["barcodes"] = {"$class": g.ARRAY_LIST, "items": clean}
+
+
+def _primary_translation(trans: list[dict]) -> dict | None:
+    for t in trans:
+        if t["language"] and t["language"].get("code") == "en":
+            return t
+    return trans[0] if trans else None
+
+
+def translations(food: dict) -> list[dict]:
+    """Names in other languages: every translation except the one used as the name."""
+    trans = items(food.get("translations"))
+    primary = _primary_translation(trans)
+    return [{"language": (t["language"] or {}).get("code"), "name": t["name"]}
+            for t in trans if t is not primary]
+
+
+def set_translations(food: dict, names: dict[str, str | None]) -> None:
+    """Set or remove names by language code, e.g. {"de": "Apfel", "fr": None}.
+
+    English is the food's name (set it with ``name``). Setting a language
+    replaces every extra name in it; None or "" removes them.
+    """
+    trans = items(food.get("translations"))
+    primary = _primary_translation(trans)
+    for code, name in names.items():
+        code = str(code).strip().lower()
+        if code not in LANGUAGES:
+            raise ValueError(f"unknown language {code!r}; choose from: {', '.join(LANGUAGES)}")
+        if code == "en":
+            raise ValueError("the English name is the food's name; set it with name")
+        rest = [t for t in trans if t is primary or (t["language"] or {}).get("code") != code]
+        if name:
+            old = next((t for t in trans if t is not primary
+                        and (t["language"] or {}).get("code") == code), None)
+            rest.append({"$class": g.TRANSLATION, "language": _language(code),
+                         "name": str(name), "id": old["id"] if old else 0})
+        trans = rest
+    food["translations"] = {"$class": g.ARRAY_LIST, "items": trans}
+
+
+def set_advanced_info(food: dict, *, barcodes: list[str] | None = None,
+                      category: str | int | None = None,
+                      tags: list[str] | None = None,
+                      translations: dict[str, str | None] | None = None) -> None:
+    """Apply the Advanced Info fields that are not None (category "" clears)."""
+    if barcodes is not None:
+        set_barcodes(food, barcodes)
+    if category is not None:
+        set_category(food, category)
+    if tags is not None:
+        set_tags(food, tags)
+    if translations is not None:
+        set_translations(food, translations)
+
 def measures(food: dict) -> list[dict]:
     return items(food["measures"]["measures"]) if food.get("measures") else []
 
@@ -366,6 +519,10 @@ def summarize_food(food: dict, children: dict[int, dict], depth: int,
     else:
         out["nutrients_per_100g"] = summarize_nutrients(values, 1.0, all_nutrients)
     out["measures"] = describe_measures(food)
+    out["category"] = category_name(food)
+    out["tags"] = tag_names(food)
+    out["barcodes"] = barcodes(food)
+    out["translations"] = translations(food)
     if ftype in RECIPE_TYPES or items(food.get("ingredients")):
         out["ingredients"] = [
             summarize_ingredient(ing, children, depth, all_nutrients)

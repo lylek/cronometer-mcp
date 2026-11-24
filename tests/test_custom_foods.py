@@ -319,3 +319,83 @@ class TestServerTools:
             out = json.loads(server.list_custom_foods("MEAL"))
         assert out["count"] == 1
         client.list_custom_foods.assert_called_once_with("MEAL", None)
+
+
+class TestAdvancedInfo:
+    def food(self):
+        f = cf.new_recipe("Apple Pie", 123)
+        f["tags"]["items"].append(g.GwtEnum(g.FOOD_TAG, 13))  # Keto: not editable
+        return f
+
+    def test_new_recipe_is_empty(self):
+        s = cf.summarize_food(cf.new_recipe("X", 1), {}, 0)
+        assert (s["category"], s["tags"], s["barcodes"], s["translations"]) == (None, [], [], [])
+
+    def test_category_by_name_and_clear(self):
+        f = self.food()
+        cf.set_category(f, "meals, entrees, and sidedishes")
+        assert f["unknown_3"] == 15 and cf.category_name(f) == "Meals, Entrees, and Sidedishes"
+        cf.set_category(f, "Supplements")
+        assert f["unknown_3"] == 24
+        cf.set_category(f, "")
+        assert f["unknown_3"] == 0 and cf.category_name(f) is None
+        with pytest.raises(ValueError, match="unknown category"):
+            cf.set_category(f, "Pies")
+
+    def test_tags_replace_editable_keep_others(self):
+        f = self.food()
+        cf.set_tags(f, ["vegan", "Nuts", "Vegan"])
+        assert cf.tag_names(f) == ["Vegan", "Nuts", "Keto"]
+        cf.set_tags(f, [])
+        assert cf.tag_names(f) == ["Keto"]
+        with pytest.raises(ValueError, match="unknown tag"):
+            cf.set_tags(f, ["Keto"])
+
+    def test_barcodes(self):
+        f = self.food()
+        cf.set_barcodes(f, [" 0123456789012", "0123456789012", 89836195845])
+        assert cf.barcodes(f) == ["0123456789012", "89836195845"]
+        with pytest.raises(ValueError, match="digits"):
+            cf.set_barcodes(f, ["12-34"])
+
+    def test_translations_set_replace_remove(self):
+        f = self.food()
+        cf.set_translations(f, {"de": "Apfelkuchen", "fr": "Tarte aux pommes"})
+        assert cf.translations(f) == [{"language": "de", "name": "Apfelkuchen"},
+                                      {"language": "fr", "name": "Tarte aux pommes"}]
+        de = cf.items(f["translations"])[1]
+        de["id"] = 77
+        cf.set_translations(f, {"de": "Apfeltorte", "fr": None})
+        assert cf.translations(f) == [{"language": "de", "name": "Apfeltorte"}]
+        assert cf.items(f["translations"])[1]["id"] == 77
+        assert cf.food_name(f) == "Apple Pie"
+        lang = cf.items(f["translations"])[1]["language"]
+        assert lang["native_name"] == "Deutsch" and lang["flag_url"].endswith("/de.png")
+        with pytest.raises(ValueError, match="name"):
+            cf.set_translations(f, {"en": "Pie"})
+        with pytest.raises(ValueError, match="unknown language"):
+            cf.set_translations(f, {"nl": "Appeltaart"})
+
+    def test_round_trip_through_codec(self):
+        f = self.food()
+        cf.set_advanced_info(f, barcodes=["5694230426041"], category="Sweets",
+                             tags=["Vegetarian"], translations={"es": "Tarta de manzana"})
+        back = g.decode_response(as_response(f))
+        s = cf.summarize_food(back, {}, 0)
+        assert s["category"] == "Sweets"
+        assert s["tags"] == ["Vegetarian", "Keto"]
+        assert s["barcodes"] == ["5694230426041"]
+        assert s["translations"] == [{"language": "es", "name": "Tarta de manzana"}]
+
+    def test_edit_custom_food_passes_advanced(self):
+        c = CronometerClient.__new__(CronometerClient)
+        c.user_id = "123"
+        raw = cf.new_recipe("Bar", 123, "RECIPE")
+        raw["food_type"] = g.enum(g.FOOD_TYPE, "FOOD")
+        raw["id"] = 9
+        c._get_food_raw = MagicMock(return_value=raw)
+        c._save_food = MagicMock(side_effect=lambda food, upd: food)
+        c._summary_after_save = lambda saved: cf.summarize_food(saved, {}, 0)
+        out = c.edit_custom_food(9, advanced=dict(barcodes=None, category="Snacks",
+                                                  tags=["Brand"], translations=None))
+        assert out["category"] == "Snacks" and out["tags"] == ["Brand"]

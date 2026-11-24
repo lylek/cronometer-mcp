@@ -1408,7 +1408,9 @@ def get_custom_food(food_source_id: int, depth: int = 1, all_nutrients: bool = F
 
     Works for any food id, including database foods. Recipes report nutrients
     for the whole recipe and per serving; plain foods per 100 g. Each
-    ingredient shows its quantity, measure, grams and calories.
+    ingredient shows its quantity, measure, grams and calories. Also shows
+    the Advanced Info: category, tags, barcodes and translations (names in
+    other languages; the English one is "name").
 
     Args:
         food_source_id: Food id (from list_custom_foods or search_foods).
@@ -1997,6 +1999,10 @@ def create_custom_recipe(
     notes: str = "",
     food_type: str = "RECIPE",
     cooked_weight_g: float | None = None,
+    barcodes: list[str] | None = None,
+    category: str | None = None,
+    tags: list[str] | None = None,
+    translations: dict[str, str | None] | None = None,
 ) -> str:
     """Create a custom recipe or meal. Cronometer computes its nutrients.
 
@@ -2010,6 +2016,24 @@ def create_custom_recipe(
                          after cooking (e.g. moisture loss). It replaces the
                          ingredient total as the recipe's weight, so per-gram
                          and per-serving values follow it.
+        barcodes: Advanced Info barcodes (UPC/EAN digits), the whole list;
+                  [] removes them all.
+        category: Advanced Info category, one of: Baby Foods, Baked Products,
+                  Beef Products, Beverages, Breakfast Cereals, Cereal Grains
+                  and Pasta, Dairy and Egg Products, Ethnic Foods, Fast Foods,
+                  Fats and Oils, Finfish and Shellfish Products, Fruits and
+                  Fruit Juices, "Lamb, Veal, and Game Products", Legumes and
+                  Legume Products, "Meals, Entrees, and Sidedishes", Nut and
+                  Seed Products, Pork Products, Poultry Products, Restaurant
+                  Foods, Sausages and Luncheon Meats, Snacks, "Soups, Sauces,
+                  and Gravies", Spices and Herbs, Supplements, Sweets,
+                  Vegetables and Vegetable Products. "" clears it.
+        tags: Advanced Info tags, the whole list, from: Whole, Brand,
+              Restaurant, Supplement, Seafood, Vegetarian, Vegan, Dairy, Nuts.
+              [] removes them.
+        translations: Names in other languages by code (fr, es, de, it, pl,
+                      pt), e.g. {"de": "Apfelkuchen"}; a null or "" value
+                      removes that language. Others are left as they are.
 
     Each ingredient is an object:
         {"food_source_id": <id from search_foods or list_custom_foods>,
@@ -2022,7 +2046,8 @@ def create_custom_recipe(
     """
     try:
         food = _get_client().create_recipe(
-            name, ingredients, servings, notes, food_type, cooked_weight_g
+            name, ingredients, servings, notes, food_type, cooked_weight_g,
+            advanced=dict(barcodes=barcodes, category=category, tags=tags, translations=translations),
         )
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:
@@ -2038,6 +2063,10 @@ def edit_custom_recipe(
     ingredients: list[dict] | None = None,
     update_past_entries: bool | None = None,
     cooked_weight_g: float | None = None,
+    barcodes: list[str] | None = None,
+    category: str | None = None,
+    tags: list[str] | None = None,
+    translations: dict[str, str | None] | None = None,
 ) -> str:
     """Edit a custom recipe or meal. Omitted fields are left unchanged.
 
@@ -2061,6 +2090,24 @@ def edit_custom_recipe(
                          get_custom_food shows original_weight_g (ingredient
                          total), cooked_weight_g and the effective
                          total_weight_g.
+        barcodes: Advanced Info barcodes (UPC/EAN digits), the whole list;
+                  [] removes them all.
+        category: Advanced Info category, one of: Baby Foods, Baked Products,
+                  Beef Products, Beverages, Breakfast Cereals, Cereal Grains
+                  and Pasta, Dairy and Egg Products, Ethnic Foods, Fast Foods,
+                  Fats and Oils, Finfish and Shellfish Products, Fruits and
+                  Fruit Juices, "Lamb, Veal, and Game Products", Legumes and
+                  Legume Products, "Meals, Entrees, and Sidedishes", Nut and
+                  Seed Products, Pork Products, Poultry Products, Restaurant
+                  Foods, Sausages and Luncheon Meats, Snacks, "Soups, Sauces,
+                  and Gravies", Spices and Herbs, Supplements, Sweets,
+                  Vegetables and Vegetable Products. "" clears it.
+        tags: Advanced Info tags, the whole list, from: Whole, Brand,
+              Restaurant, Supplement, Seafood, Vegetarian, Vegan, Dairy, Nuts.
+              [] removes them.
+        translations: Names in other languages by code (fr, es, de, it, pl,
+                      pt), e.g. {"de": "Apfelkuchen"}; a null or "" value
+                      removes that language. Others are left as they are.
 
     Each ingredient is an object:
         {"food_source_id": <id from search_foods or list_custom_foods>,
@@ -2074,7 +2121,7 @@ def edit_custom_recipe(
     try:
         food = _get_client().edit_recipe(
             food_source_id, name, notes, servings, ingredients, update_past_entries,
-            cooked_weight_g,
+            cooked_weight_g, advanced=dict(barcodes=barcodes, category=category, tags=tags, translations=translations),
         )
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:
@@ -2124,6 +2171,10 @@ def edit_custom_food(
     per_grams: float = 100.0,
     measures: list[dict] | None = None,
     update_past_entries: bool | None = None,
+    barcodes: list[str] | None = None,
+    category: str | None = None,
+    tags: list[str] | None = None,
+    translations: dict[str, str | None] | None = None,
 ) -> str:
     """Edit one of your custom (non-recipe) foods. Omitted fields are unchanged.
 
@@ -2147,10 +2198,29 @@ def edit_custom_food(
                   [{"name": "bar", "grams": 51}, {"name": "Tbsp", "quantity": 2,
                   "grams": 30}]. Same-named sizes keep their ids.
         update_past_entries: Only needed when the food is in use.
+        barcodes: Advanced Info barcodes (UPC/EAN digits), the whole list;
+                  [] removes them all.
+        category: Advanced Info category, one of: Baby Foods, Baked Products,
+                  Beef Products, Beverages, Breakfast Cereals, Cereal Grains
+                  and Pasta, Dairy and Egg Products, Ethnic Foods, Fast Foods,
+                  Fats and Oils, Finfish and Shellfish Products, Fruits and
+                  Fruit Juices, "Lamb, Veal, and Game Products", Legumes and
+                  Legume Products, "Meals, Entrees, and Sidedishes", Nut and
+                  Seed Products, Pork Products, Poultry Products, Restaurant
+                  Foods, Sausages and Luncheon Meats, Snacks, "Soups, Sauces,
+                  and Gravies", Spices and Herbs, Supplements, Sweets,
+                  Vegetables and Vegetable Products. "" clears it.
+        tags: Advanced Info tags, the whole list, from: Whole, Brand,
+              Restaurant, Supplement, Seafood, Vegetarian, Vegan, Dairy, Nuts.
+              [] removes them.
+        translations: Names in other languages by code (fr, es, de, it, pl,
+                      pt), e.g. {"de": "Apfelkuchen"}; a null or "" value
+                      removes that language. Others are left as they are.
     """
     try:
         food = _get_client().edit_custom_food(
-            food_source_id, name, notes, nutrients, per_grams, measures, update_past_entries
+            food_source_id, name, notes, nutrients, per_grams, measures, update_past_entries,
+            advanced=dict(barcodes=barcodes, category=category, tags=tags, translations=translations),
         )
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:

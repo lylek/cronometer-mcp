@@ -2892,8 +2892,13 @@ class CronometerClient:
         notes: str = "",
         food_type: str = "RECIPE",
         cooked_weight_g: float | None = None,
+        advanced: dict | None = None,
     ) -> dict:
-        """Create a custom recipe or meal. See custom_foods.build_ingredient for specs."""
+        """Create a custom recipe or meal. See custom_foods.build_ingredient for specs.
+
+        ``advanced`` holds Advanced Info: barcodes, category, tags, translations
+        (see custom_foods.set_advanced_info).
+        """
         if food_type.upper() not in cf.RECIPE_TYPES:
             raise ValueError("food_type must be RECIPE or MEAL")
         if not ingredients:
@@ -2902,6 +2907,7 @@ class CronometerClient:
         food = cf.new_recipe(name, int(self.user_id), food_type.upper(), servings, notes)
         if cooked_weight_g:
             cf.set_cooked_weight(food, cooked_weight_g)
+        cf.set_advanced_info(food, **(advanced or {}))
         food["ingredients"]["items"] = self._build_ingredients(ingredients, [])
         return self._summary_after_save(self._save_food(food, None))
 
@@ -2914,6 +2920,7 @@ class CronometerClient:
         ingredients: list[dict] | None = None,
         update_past_entries: bool | None = None,
         cooked_weight_g: float | None = None,
+        advanced: dict | None = None,
     ) -> dict:
         """Change a custom recipe or meal. ``ingredients`` replaces the whole list.
 
@@ -2932,6 +2939,7 @@ class CronometerClient:
             cf.set_servings(food, servings)
         if cooked_weight_g is not None:
             cf.set_cooked_weight(food, cooked_weight_g or None)
+        cf.set_advanced_info(food, **(advanced or {}))
         if ingredients is not None:
             if not ingredients:
                 raise ValueError("a recipe needs at least one ingredient")
@@ -2970,6 +2978,7 @@ class CronometerClient:
         per_grams: float = 100.0,
         measures: list[dict] | None = None,
         update_past_entries: bool | None = None,
+        advanced: dict | None = None,
     ) -> dict:
         """Change a custom (non-recipe) food.
 
@@ -2991,6 +3000,7 @@ class CronometerClient:
             cf.set_nutrients(food, nutrients, per_grams)
         if measures is not None:
             cf.set_food_measures(food, measures)
+        cf.set_advanced_info(food, **(advanced or {}))
         return self._summary_after_save(self._save_food(food, update_past_entries))
 
     def copy_food(self, food_id: int, name: str | None = None) -> dict:
