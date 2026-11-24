@@ -35,6 +35,7 @@ _M = _F + "models."
 
 STRING = "java.lang.String/2004016611"
 INTEGER = "java.lang.Integer/3438268394"
+SHORT = "java.lang.Short/551743396"
 ARRAY_LIST = "java.util.ArrayList/4159755760"
 HASH_SET = "java.util.HashSet/3273092938"
 HASH_MAP = "java.util.HashMap/1797211028"
@@ -245,7 +246,7 @@ _BIOMETRIC_FIELDS = [
     ("id", "long"),
     ("metadata", "str"),  # JSON, e.g. Garmin sample statistics
     ("metric_id", "int"),
-    ("tz_offset", "obj"),
+    ("tz_offset", "short"),
     ("order", "int"),
     ("sample_stats", "obj"),  # SampleStats for metrics sampled overnight (HRV...)
     ("unknown_9", "obj"),
@@ -271,7 +272,7 @@ LAYOUTS.update({
         ("day", "obj"),
         ("unknown_1", "bool"),
         ("unknown_2", "bool"),
-        ("tz_offset", "obj"),
+        ("tz_offset", "short"),
         ("order", "int"),  # diary group in the high 16 bits
         ("time", "obj"),
         ("owner", "int"),
@@ -292,7 +293,7 @@ LAYOUTS.update({
         ("metadata", "str"),  # JSON from the tracker, if any
         ("minutes", "double"),
         ("name", "str"),
-        ("tz_offset", "obj"),
+        ("tz_offset", "short"),
         ("order", "int"),
         ("source", "str"),  # "Garmin", "Fitbit"... or None if entered by hand
         ("time", "obj"),
@@ -305,7 +306,7 @@ LAYOUTS.update({
         ("day", "obj"),
         ("id", "long"),
         ("unknown_2", "str"),
-        ("tz_offset", "obj"),
+        ("tz_offset", "short"),
         ("order", "int"),
         ("text", "str"),
         ("time", "obj"),
@@ -478,7 +479,7 @@ _COLLECTIONS = {ARRAY_LIST, HASH_SET, SEARCH_HIT_ARRAY, LINKED_LIST, UNIT_ARRAY}
 _MAPS = {HASH_MAP, USER_PREFERENCES}
 # Values serialized as a single token: boxed numbers, and java.sql dates as a long.
 _BOXED = {INTEGER, DOUBLE, "java.lang.Long/4227064769",
-          "java.lang.Short/551743396", SQL_DATE}
+          SHORT, SQL_DATE}
 
 
 @dataclass(frozen=True)
@@ -527,7 +528,7 @@ class _Decoder:
         return self.strings[ref - 1] if ref else None
 
     def value(self, kind: str):
-        if kind == "obj":
+        if kind in ("obj", "short"):
             return self.object()
         if kind == "str":
             return self.string()
@@ -671,6 +672,15 @@ class _Encoder:
     def value(self, kind: str, v) -> None:
         if kind == "obj":
             self.object(v)
+        elif kind == "short":
+            # A boxed java.lang.Short field (tz_offset); the server rejects
+            # an Integer there.
+            if v is None:
+                self.emit(0)
+            else:
+                self.seen[("box", object())] = len(self.seen) + 1
+                self.emit(self.sref(SHORT))
+                self.emit(int(v))
         elif kind == "str":
             self.emit(self.sref(v))
         elif kind == "bool":

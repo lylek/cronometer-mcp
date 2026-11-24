@@ -107,3 +107,22 @@ def test_encode_long_param():
     body = g.encode_request("H", "explodeRecipe", [(g.STRING, "n"), ("I", 7), ("J", "D80lp$")])
     assert body.endswith("|D80lp$|")
     assert g.encode_request("H", "m", [("J", 64)]).endswith("|BA|")
+
+
+class TestShortFields:
+    def test_tz_offset_is_a_boxed_short(self):
+        """The server rejects an Integer in tz_offset; it must be a Short."""
+        enc = g._Encoder()
+        enc.object(serving(1 << 16))
+        assert g.SHORT in enc.strings
+        assert g.INTEGER not in enc.strings
+        assert "-480" in enc.out
+
+    def test_unset_tz_offset_is_null(self):
+        enc = g._Encoder()
+        enc.object(dict(serving(1 << 16), tz_offset=None))
+        assert g.SHORT not in enc.strings
+
+    def test_round_trip(self):
+        obj = serving(3 << 16 | 2)
+        assert g.decode_response(as_response(obj))["tz_offset"] == -480
