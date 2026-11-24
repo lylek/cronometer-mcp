@@ -5,9 +5,9 @@ Run with ``pytest -m live``; needs CRONOMETER_USERNAME and CRONOMETER_PASSWORD.
 Cronometer rations its CSV export per account (HTTP 429 for hours once
 exceeded, which also breaks the MCP's own reads), so a run makes exactly two
 export calls, both for TEST_DAY: servings and biometrics. Both must be real
-CSVs with no rows before anything is written; other entry types (notes,
-exercises) aren't checked, since that would take more exports and the writes
-only remove the ids they added. Writes touch TEST_DAY only and are checked by
+CSVs with no rows before anything is written; notes are checked through the
+diary instead, and exercises aren't checked, since that would take more exports
+and the writes only remove the ids they added. Writes touch TEST_DAY only and are checked by
 add-then-remove of the returned id, without further exports. The first failure
 stops the writes. A failed remove is never cleaned up automatically; the next
 run's empty check refuses to write until a person has looked.
@@ -75,7 +75,7 @@ def require_clean_day(servings_csv: str, biometrics_csv: str) -> None:
 
 
 def write_round_trips(c) -> None:
-    """Add then remove one serving, then one biometric. Stops at the first failure."""
+    """Add then remove one serving, one biometric and one note. Stops at the first failure."""
     food = c.find_foods("egg")[0]
     added = c.add_serving(food_source_id=food["food_source_id"], day=TEST_DAY, grams=50)
     assert added["serving_id"]
@@ -84,6 +84,15 @@ def write_round_trips(c) -> None:
     biometric_id = c.add_biometric("weight", 150, TEST_DAY)
     assert biometric_id, "addBiometric succeeded but its id could not be parsed"
     assert c.remove_biometric(biometric_id)
+
+    # Notes are checked through the diary, not the export.
+    assert not c.get_notes(TEST_DAY), f"leftover notes on {TEST_DAY}"
+    note_id = c.add_note(TEST_DAY, "live test note", diary_group=1, at=(17, 5))
+    c.edit_note(TEST_DAY, note_id, text="live test note, edited", at=None)
+    [note] = c.get_notes(TEST_DAY)
+    assert (note["id"], note["text"], note["time"]) == (note_id, "live test note, edited", None)
+    c.remove_note(TEST_DAY, note_id)
+    assert not c.get_notes(TEST_DAY)
 
 
 # ── Reads ─────────────────────────────────────────────────────────────

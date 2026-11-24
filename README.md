@@ -93,9 +93,10 @@ If you installed from source with `pip install -e .`, you can also use the full 
 ### Read-only mode
 
 Set `CRONOMETER_READ_ONLY=1` (also accepts `true` or `yes`) in the server's `env` to expose only the
-read tools. The 13 tools that change your Cronometer account are not registered at all, so the
-client never sees them: adding or removing food entries, macro targets, schedules and templates,
-fasts, biometrics, copy day, mark day complete, and repeat items. `sync_cronometer` stays available;
+read tools. The 29 tools that change your Cronometer account are not registered at all, so the
+client never sees them: adding, editing or removing food entries, notes, biometrics, custom foods,
+recipes and meals; macro and nutrient targets, schedules and templates; profile and weight goal;
+fasts; diary and recipe order; copy day, mark day complete, and repeat items. `sync_cronometer` stays available;
 it only writes files on your machine.
 
 This limits what the server offers, not what your credentials can do. Cronometer has no read-only
@@ -177,6 +178,10 @@ the credentials themselves keep full access.
 | `reorder_diary_entries` | Rearrange a diary group's entries, or move entries into it from another group |
 | `copy_day` | Copy all diary entries from one date to another |
 | `set_day_complete` | Mark a diary day as complete or incomplete |
+| `get_notes` | Diary notes for a date range, with note ids, groups and times |
+| `add_note` | Add a note to a diary group, optionally with a time of day |
+| `edit_note` | Change a note's text or time |
+| `remove_note` | Delete a diary note |
 
 ### Custom Foods, Recipes & Meals
 

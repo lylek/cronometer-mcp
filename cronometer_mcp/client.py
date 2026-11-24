@@ -17,7 +17,7 @@ import os
 import pickle
 import re
 from collections import Counter
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import requests
@@ -2378,6 +2378,108 @@ class CronometerClient:
             logger.info("Removed biometric: id=%s", biometric_id)
             return True
         raise RuntimeError(f"removeMeasurement failed: {raw[:300]}")
+
+    # --- diary notes -----------------------------------------------------------
+
+    @staticmethod
+    def _note_time(day: date, at: tuple[int, int] | None) -> tuple[dict | None, int | None]:
+        """The Note's time and tz_offset (minutes from UTC, this computer's
+        zone on that day) for an "HH:MM" given as (hour, minute); the web
+        app leaves both unset for a note with no time."""
+        if at is None:
+            return None, None
+        hour, minute = at
+        local = datetime(day.year, day.month, day.day, hour, minute).astimezone()
+        offset = int(local.utcoffset().total_seconds() // 60)
+        return {"$class": gwt_foods.TIME, "hour": hour, "minute": minute, "second": 0}, offset
+
+    def get_notes(self, day: date) -> list[dict]:
+        """A day's diary notes, as decoded Note objects."""
+        return [e for e in diary.entries(self.get_day_info(day))
+                if gwt_foods.short_class(e) == "Note"]
+
+    def _find_note(self, day: date, note_id: str) -> dict:
+        note = next((n for n in self.get_notes(day) if n["id"] == note_id), None)
+        if note is None:
+            raise ValueError(f"no note {note_id!r} on {day.isoformat()}")
+        return note
+
+    def add_note(self, day: date, text: str, diary_group: int = 0,
+                 at: tuple[int, int] | None = None) -> str:
+        """Add a note at the end of a diary group, as the web app's Add Note
+        dialog does (addNote). ``at`` is an optional (hour, minute).
+
+        Returns the new note's id.
+        """
+        if not text.strip():
+            raise ValueError("a note needs some text")
+        group = diary.group_layout(self.get_day_info(day)).get(diary_group, [])
+        position = max(((e.get("order") or 0) & 0xFFFF for e in group), default=0) + 1
+        time_obj, offset = self._note_time(day, at)
+        note = {
+            "$class": gwt_foods.NOTE, "day": diary.day_obj(day), "id": "A",
+            "unknown_2": None, "tz_offset": offset,
+            "order": (diary_group << 16) | position, "text": text,
+            "time": time_obj, "owner": int(self.user_id),
+        }
+        body = gwt_foods.encode_request(self.gwt_header, "addNote", [
+            (gwt_foods.STRING, self.nonce), (gwt_foods.NOTE, note), ("I", int(self.user_id)),
+        ])
+        raw = self._gwt_post(body)
+        # The reply is the new id, a bare GWT long: //OK["CZa_p",[],0,7]
+        match = re.match(r'//OK\["([A-Za-z0-9$_]+)"', raw)
+        if not match:
+            raise RuntimeError(f"addNote failed: {raw[:300]}")
+        return match.group(1)
+
+    def edit_note(self, day: date, note_id: str, text: str | None = None,
+                  at: tuple[int, int] | None | bool = False) -> dict:
+        """Change a note's text and/or time (editNote). ``at`` is an
+        (hour, minute), None to clear the time, or False to leave it."""
+        note = self._find_note(day, note_id)
+        if text is not None:
+            if not text.strip():
+                raise ValueError("a note needs some text")
+            note["text"] = text
+        if at is not False:
+            note["time"], note["tz_offset"] = self._note_time(day, at)
+        self._food_rpc("editNote", [(gwt_foods.NOTE, note), ("I", _USER_ID)])
+        return note
+
+    def remove_note(self, day: date, note_id: str) -> dict:
+        """Delete a diary note (removeNote). Checks the note is on ``day``
+        first: the server reports success for any id. Returns the note."""
+        note = self._find_note(day, note_id)
+        self._food_rpc("removeNote", [("J", note_id), ("I", _USER_ID)])
+        return note
+
+    def list_notes(self, start: date | None = None, end: date | None = None) -> list[dict]:
+        """Diary notes per day, with id, group, time and text."""
+        start = start or date.today()
+        end = end or start
+        if end < start:
+            raise ValueError("end date is before start date")
+        n = (end - start).days + 1
+        if n <= self.MAX_DIARY_DAYS:
+            days = self._days(start, end)
+        else:
+            # The notes export finds the days with notes in one request, so
+            # a long range costs one diary fetch per day that has notes. The
+            # export is rationed, so short ranges read the diary directly.
+            days = sorted({date.fromisoformat(r["Day"])
+                           for r in self.export_parsed("notes", start, end)})
+        names = {g["wire_index"]: g["name"] for g in self.diary_groups}
+        out = []
+        for d in days:
+            for n in sorted(self.get_notes(d), key=lambda n: n.get("order") or 0):
+                t = n.get("time")
+                out.append({
+                    "date": d.isoformat(), "note_id": n["id"],
+                    "diary_group": names.get((n.get("order") or 0) >> 16),
+                    "time": f"{t['hour']:02d}:{t['minute']:02d}" if t else None,
+                    "text": n["text"],
+                })
+        return out
 
     def _parse_recent_biometrics(self, raw: str) -> list[dict]:
         """Parse getRecentBiometrics GWT response.

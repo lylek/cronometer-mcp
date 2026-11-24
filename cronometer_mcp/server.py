@@ -1147,6 +1147,114 @@ def remove_biometric(biometric_id: str) -> str:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
 
+def _parse_note_time(time: str) -> tuple[int, int]:
+    """ "HH:MM" (24-hour) -> (hour, minute)."""
+    try:
+        hour, minute = (int(x) for x in time.strip().split(":"))
+    except ValueError:
+        raise ValueError(f"time must be HH:MM (24-hour), got {time!r}") from None
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise ValueError(f"time must be HH:MM (24-hour), got {time!r}")
+    return hour, minute
+
+
+@_tool
+def get_notes(start_date: str | None = None, end_date: str | None = None) -> str:
+    """Diary notes for a date range, with the note_id that edit_note and
+    remove_note take, the diary group, the time (if any) and the text.
+
+    Args:
+        start_date: YYYY-MM-DD (default today).
+        end_date: YYYY-MM-DD (default start_date).
+    """
+    try:
+        start = _parse_date(start_date) or date.today()
+        end = _parse_date(end_date) or start
+        notes = _get_client().list_notes(start, end)
+        return json.dumps({"status": "success", "count": len(notes), "notes": notes},
+                          indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def add_note(entry_date: str, text: str, diary_group: str | int | None = None,
+             time: str | None = None) -> str:
+    """Add a note to the diary, at the end of a diary group, as the Diary
+    page's Note button does.
+
+    Args:
+        entry_date: YYYY-MM-DD.
+        text: The note.
+        diary_group: Diary group name or wire_index (see list_diary_groups);
+            defaults to the meal for the current time of day.
+        time: Optional time of day, HH:MM (24-hour), shown beside the note.
+    """
+    try:
+        client = _get_client()
+        day = date.fromisoformat(entry_date)
+        at = _parse_note_time(time) if time else None
+        group, err = _resolve_diary_group(client, diary_group)
+        if err:
+            raise ValueError(err)
+        note_id = client.add_note(day, text, diary_group=group, at=at)
+        return json.dumps({
+            "status": "success", "date": entry_date, "note_id": note_id,
+            "diary_group": next((g["name"] for g in client.diary_groups
+                                 if g["wire_index"] == group), group),
+            "time": time, "text": text,
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def edit_note(entry_date: str, note_id: str, text: str | None = None,
+              time: str | None = None, clear_time: bool = False) -> str:
+    """Change a diary note's text or time. To move it to another group,
+    use reorder_diary_entries.
+
+    Args:
+        entry_date: The note's date, YYYY-MM-DD.
+        note_id: From get_notes or get_diary_order.
+        text: New text (omit to keep).
+        time: New time, HH:MM (24-hour) (omit to keep).
+        clear_time: True to remove the note's time.
+    """
+    try:
+        if time and clear_time:
+            raise ValueError("give time or clear_time, not both")
+        if text is None and not time and not clear_time:
+            raise ValueError("nothing to change: give text, time or clear_time")
+        at = None if clear_time else (_parse_note_time(time) if time else False)
+        note = _get_client().edit_note(date.fromisoformat(entry_date), note_id,
+                                       text=text, at=at)
+        t = note.get("time")
+        return json.dumps({
+            "status": "success", "date": entry_date, "note_id": note_id,
+            "time": f"{t['hour']:02d}:{t['minute']:02d}" if t else None,
+            "text": note["text"],
+        }, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
+@_write_tool
+def remove_note(entry_date: str, note_id: str) -> str:
+    """Delete a diary note.
+
+    Args:
+        entry_date: The note's date, YYYY-MM-DD.
+        note_id: From get_notes or get_diary_order.
+    """
+    try:
+        note = _get_client().remove_note(date.fromisoformat(entry_date), note_id)
+        return json.dumps({"status": "success", "date": entry_date, "note_id": note_id,
+                           "removed_text": note["text"]}, indent=2, ensure_ascii=False)
+    except Exception as e:
+        return _error(e)
+
+
 def _get_data_dir() -> Path:
     """Get the data directory for sync output.
 

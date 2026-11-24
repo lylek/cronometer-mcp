@@ -25,6 +25,7 @@ WRITE_TOOLS = {
     "copy_custom_food", "delete_custom_food",
     "set_nutrient_target", "update_profile", "apply_macro_template", "set_weight_goal", "update_macro_settings",
     "reorder_recipe_ingredients", "reorder_diary_entries",
+    "add_note", "edit_note", "remove_note",
 }
 
 
@@ -44,13 +45,13 @@ class TestReadOnlyMode:
     def test_default_registers_write_tools(self):
         names = _tool_names({"CRONOMETER_READ_ONLY": ""})
         assert WRITE_TOOLS <= names
-        assert len(names) == 49
+        assert len(names) == 53
 
     @pytest.mark.parametrize("value", ["1", "true", "TRUE", "yes"])
     def test_read_only_drops_every_write_tool(self, value):
         names = _tool_names({"CRONOMETER_READ_ONLY": value})
         assert not names & WRITE_TOOLS
-        assert len(names) == 49 - len(WRITE_TOOLS)
+        assert len(names) == 53 - len(WRITE_TOOLS)
         assert {"get_food_log", "search_foods", "get_macro_targets",
                 "sync_cronometer"} <= names
 
@@ -196,3 +197,29 @@ class TestTransportSelection:
             self._run_main({"CRONOMETER_TRANSPORT": "streamable-http",
                             "CRONOMETER_HOST": "::1", "CRONOMETER_PORT": "8000"})
         assert "http://[::1]:8000/mcp" in caplog.text
+
+
+class TestNoteTools:
+    @pytest.mark.parametrize("bad", ["25:00", "7", "7:60", "noon"])
+    def test_bad_time_is_rejected(self, bad):
+        with pytest.raises(ValueError, match="HH:MM"):
+            server._parse_note_time(bad)
+
+    def test_time_parses(self):
+        assert server._parse_note_time(" 7:05 ") == (7, 5)
+
+    @pytest.mark.parametrize("kw,msg", [
+        ({}, "nothing to change"),
+        ({"time": "08:00", "clear_time": True}, "not both"),
+    ])
+    def test_edit_needs_one_change(self, kw, msg):
+        with patch.object(server, "_get_client") as get:
+            out = json.loads(server.edit_note("2000-01-01", "N1", **kw))
+        assert out["status"] == "error" and msg in out["message"]
+        get.return_value.edit_note.assert_not_called()
+
+    def test_edit_passes_clear_time_as_none(self):
+        with patch.object(server, "_get_client") as get:
+            get.return_value.edit_note.return_value = {"text": "x", "time": None}
+            server.edit_note("2000-01-01", "N1", clear_time=True)
+        assert get.return_value.edit_note.call_args.kwargs == {"text": None, "at": None}

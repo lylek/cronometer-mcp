@@ -2067,3 +2067,108 @@ class TestAddBiometric:
     def test_rejects_unknown_unit(self):
         with pytest.raises(ValueError, match="takes units"):
             self._client().add_biometric("body_fat", 20, date(2000, 1, 1), unit="kg")
+
+
+class TestNotes:
+    DAY = date(2000, 1, 1)
+
+    def _note(self, nid, order, text="hi", time=None, tz=None):
+        return {"$class": gwt_foods.NOTE, "day": {"$class": gwt_foods.DAY, "day": 1,
+                "month": 1, "year": 2000}, "id": nid, "unknown_2": None,
+                "tz_offset": tz, "order": order, "text": text, "time": time, "owner": 42}
+
+    def _client(self, notes=(), response='//OK["CZa_p",[],0,7]'):
+        c = CronometerClient(username="test@x.com", password="pw")
+        c._authenticated = True
+        c.nonce = "n"
+        c.user_id = "42"
+        c.get_day_info = MagicMock(return_value={"entries": None})
+        c.get_notes = MagicMock(return_value=[dict(n) for n in notes])
+        c.session.post = MagicMock(return_value=MagicMock(
+            text=response, raise_for_status=lambda: None,
+        ))
+        return c
+
+    def _sent(self, c, enc):
+        _, method, params = enc.call_args.args
+        return method, params
+
+    def test_add_returns_the_new_id(self):
+        c = self._client()
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            assert c.add_note(self.DAY, "note", diary_group=3) == "CZa_p"
+        method, params = self._sent(c, enc)
+        note = params[1][1]
+        assert method == "addNote"
+        assert params[1][0] == gwt_foods.NOTE and params[2] == ("I", 42)
+        assert note["order"] == (3 << 16) | 1
+        assert (note["time"], note["tz_offset"], note["id"]) == (None, None, "A")
+
+    def test_add_with_time_sets_time_and_offset(self):
+        c = self._client()
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            c.add_note(self.DAY, "note", at=(17, 5))
+        note = self._sent(c, enc)[1][1][1]
+        assert (note["time"]["hour"], note["time"]["minute"]) == (17, 5)
+        assert isinstance(note["tz_offset"], int)
+
+    def test_add_rejects_empty_text(self):
+        with pytest.raises(ValueError, match="text"):
+            self._client().add_note(self.DAY, "  ")
+
+    def test_add_raises_on_unexpected_reply(self):
+        with pytest.raises(RuntimeError, match="addNote failed"):
+            self._client(response="//OK[[],0,7]").add_note(self.DAY, "x")
+
+    def test_edit_keeps_time_unless_asked(self):
+        t = {"$class": gwt_foods.TIME, "hour": 8, "minute": 0, "second": 0}
+        c = self._client([self._note("N1", 65537, time=t, tz=-480)], response="//OK[[],0,7]")
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            c.edit_note(self.DAY, "N1", text="new")
+        method, params = self._sent(c, enc)
+        note = params[1][1]
+        assert method == "editNote"
+        assert (note["text"], note["time"]["hour"], note["tz_offset"]) == ("new", 8, -480)
+
+    def test_edit_clears_time(self):
+        t = {"$class": gwt_foods.TIME, "hour": 8, "minute": 0, "second": 0}
+        c = self._client([self._note("N1", 65537, time=t, tz=-480)], response="//OK[[],0,7]")
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            c.edit_note(self.DAY, "N1", at=None)
+        note = self._sent(c, enc)[1][1][1]
+        assert (note["time"], note["tz_offset"], note["text"]) == (None, None, "hi")
+
+    def test_unknown_note_is_an_error(self):
+        c = self._client([self._note("N1", 65537)])
+        with pytest.raises(ValueError, match="no note 'N2'"):
+            c.edit_note(self.DAY, "N2", text="x")
+        with pytest.raises(ValueError, match="no note 'N2'"):
+            c.remove_note(self.DAY, "N2")
+        c.session.post.assert_not_called()
+
+    def test_remove_sends_the_id_as_a_long(self):
+        c = self._client([self._note("N1", 65537)], response="//OK[[],0,7]")
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            assert c.remove_note(self.DAY, "N1")["text"] == "hi"
+        method, params = self._sent(c, enc)
+        assert method == "removeNote" and params[1] == ("J", "N1")
+
+    def test_short_range_reads_the_diary_without_exporting(self):
+        c = self._client()
+        c._diary_groups = []
+        c.export_parsed = MagicMock()
+        c.list_notes(date(2000, 1, 1), date(2000, 1, 3))
+        c.export_parsed.assert_not_called()
+        assert c.get_notes.call_count == 3
+
+    def test_long_range_fetches_only_days_with_notes(self):
+        t = {"$class": gwt_foods.TIME, "hour": 17, "minute": 5, "second": 0}
+        c = self._client()
+        c._diary_groups = [{"wire_index": 3, "name": "Dinner", "enabled": True}]
+        c.export_parsed = MagicMock(return_value=[{"Day": "2000-01-03"}, {"Day": "2000-01-03"}])
+        c.get_notes = MagicMock(return_value=[self._note("B", 196610, "second"),
+                                              self._note("A", 196609, "first", time=t)])
+        out = c.list_notes(date(2000, 1, 1), date(2001, 1, 1))
+        c.get_notes.assert_called_once_with(date(2000, 1, 3))
+        assert [(n["note_id"], n["diary_group"], n["time"]) for n in out] == [
+            ("A", "Dinner", "17:05"), ("B", "Dinner", None)]

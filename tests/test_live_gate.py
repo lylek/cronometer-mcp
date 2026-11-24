@@ -31,6 +31,27 @@ class FakeClient:
     def remove_biometric(self, biometric_id):
         return True
 
+    # A one-note diary for TEST_DAY.
+    notes = None
+
+    def get_notes(self, day):
+        assert day == TEST_DAY
+        return list(self.notes or [])
+
+    def add_note(self, day, text, diary_group=0, at=None):
+        assert day == TEST_DAY
+        self.notes = [{"id": "N1", "text": text, "time": at}]
+        return "N1"
+
+    def edit_note(self, day, note_id, text=None, at=False):
+        assert day == TEST_DAY and note_id == "N1"
+        self.notes[0].update(text=text, time=None if at is False else at)
+
+    def remove_note(self, day, note_id):
+        assert day == TEST_DAY and note_id == "N1"
+        self.note_removed = True
+        self.notes = []
+
 
 def test_clean_day_passes():
     require_clean_day(SERVINGS_HEADER, BIOMETRICS_HEADER)
@@ -61,10 +82,10 @@ def test_failed_serving_remove_stops_further_writes():
     assert not fake.biometric_added
 
 
-def test_round_trips_run_both_writes():
+def test_round_trips_run_every_write():
     fake = FakeClient()
     write_round_trips(fake)
-    assert fake.biometric_added
+    assert fake.biometric_added and fake.note_removed
 
 
 def test_parallel_run_refused(monkeypatch):
