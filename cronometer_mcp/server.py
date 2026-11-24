@@ -10,7 +10,7 @@ from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
 
-from .client import CronometerClient
+from .client import _BIOMETRIC_TYPES, CronometerClient
 from .markdown import generate_food_log_md
 
 logging.basicConfig(level=logging.INFO)
@@ -1006,31 +1006,36 @@ def add_biometric(
     metric_type: str,
     value: float,
     entry_date: str,
+    unit: str | None = None,
+    diary_group: str | int | None = None,
 ) -> str:
-    """Add a biometric entry to Cronometer.
-
-    Supported metric types: weight (lbs), blood_glucose (mg/dL),
-    heart_rate (bpm), body_fat (%).
+    """Add a biometric entry to Cronometer, at the end of a diary group.
 
     Args:
         metric_type: One of 'weight', 'blood_glucose', 'heart_rate', 'body_fat'.
-        value: The value in display units (lbs, mg/dL, bpm, %).
+        value: The value, in `unit`.
         entry_date: Date as YYYY-MM-DD.
+        unit: Weight: "lbs" (default), "kg" or "st". Blood glucose: "mg/dL"
+            (default) or "mmol/L". Heart rate: "bpm". Body fat: "%".
+        diary_group: Diary group name or wire_index (see list_diary_groups);
+            defaults to the first group (Uncategorized on most accounts).
     """
     try:
-        from datetime import date as date_type
-
         client = _get_client()
-        day = date_type.fromisoformat(entry_date)
+        day = date.fromisoformat(entry_date)
+        group = 0
+        if diary_group is not None:
+            group, err = _resolve_diary_group(client, diary_group)
+            if err:
+                raise ValueError(err)
         biometric_id = client.add_biometric(
-            metric_type=metric_type,
-            value=value,
-            day=day,
+            metric_type=metric_type, value=value, day=day, unit=unit, diary_group=group,
         )
         return json.dumps({
             "status": "success",
             "metric_type": metric_type,
             "value": value,
+            "unit": unit or _BIOMETRIC_TYPES[metric_type][1],
             "date": entry_date,
             "biometric_id": biometric_id,
             "note": "Use biometric_id with remove_biometric to delete this entry.",

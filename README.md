@@ -204,7 +204,7 @@ the credentials themselves keep full access.
 | Tool | Description |
 |------|-------------|
 | `get_recent_biometrics` | Get recently logged biometric entries |
-| `add_biometric` | Log weight (lbs), blood glucose (mg/dL), heart rate (bpm), or body fat (%) |
+| `add_biometric` | Log weight (lbs, kg or st), blood glucose (mg/dL or mmol/L), heart rate (bpm), or body fat (%), optionally into a chosen diary group |
 | `remove_biometric` | Remove a biometric entry |
 
 ### Sync

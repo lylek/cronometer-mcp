@@ -5,6 +5,7 @@ from collections import namedtuple
 import pytest
 import requests
 from unittest.mock import patch, MagicMock
+from cronometer_mcp import gwt_foods
 from datetime import date
 
 from cronometer_mcp.client import CronometerClient, EXPORT_TYPES, UNIVERSAL_MEASURE_ID
@@ -2045,13 +2046,43 @@ class TestDeleteRepeatItem:
 
 
 class TestAddBiometric:
-    def test_id_with_gwt_long_chars(self):
-        """GWT long ids use A-Z a-z 0-9 $ _; all must survive parsing."""
+    METRICS = {
+        1: {"name": "Weight", "units": [(1, "kg", 1.0), (2, "lbs", 0.453592), (68524, "st", 6.35029)]},
+        3: {"name": "Heart Rate", "units": [(5, "bpm", 1.0)]},
+        6: {"name": "Blood Glucose", "units": [(8, "mmol/L", 1.0), (9, "mg/dL", 0.0555)]},
+        8: {"name": "Body Fat", "units": [(13, "%", 1.0), (29616, "kg", 0.0)]},
+    }
+
+    def _client(self, response='//OK["B$x_9P",[],0,7]'):
         c = CronometerClient(username="test@x.com", password="pw")
         c._authenticated = True
         c.nonce = "n"
         c.user_id = "42"
+        c.get_metrics = MagicMock(return_value=self.METRICS)
+        c.get_day_info = MagicMock(return_value={"entries": None})
         c.session.post = MagicMock(return_value=MagicMock(
-            text='//OK["B$x_9P",[],0,7]', raise_for_status=lambda: None,
+            text=response, raise_for_status=lambda: None,
         ))
-        assert c.add_biometric("weight", 150, date(2000, 1, 1)) == "B$x_9P"
+        return c
+
+    def test_id_with_gwt_long_chars(self):
+        """GWT long ids use A-Z a-z 0-9 $ _; all must survive parsing."""
+        assert self._client().add_biometric("weight", 150, date(2000, 1, 1)) == "B$x_9P"
+
+    @pytest.mark.parametrize("kind,unit,metric_id,unit_id", [
+        ("weight", None, 1, 2), ("weight", "kg", 1, 1), ("heart_rate", None, 3, 5),
+        ("blood_glucose", None, 6, 9), ("blood_glucose", "mmol/l", 6, 8), ("body_fat", None, 8, 13),
+    ])
+    def test_sends_the_metric_and_unit(self, kind, unit, metric_id, unit_id):
+        c = self._client()
+        with patch.object(gwt_foods, "encode_request", wraps=gwt_foods.encode_request) as enc:
+            c.add_biometric(kind, 60, date(2000, 1, 1), unit=unit, diary_group=2)
+        _, method, params = enc.call_args.args
+        b = params[1][1]
+        assert method == "addBiometric"
+        assert (b["metric_id"], b["unit_id"], b["value"]) == (metric_id, unit_id, 60.0)
+        assert b["order"] == (2 << 16) | 1
+
+    def test_rejects_unknown_unit(self):
+        with pytest.raises(ValueError, match="takes units"):
+            self._client().add_biometric("body_fat", 20, date(2000, 1, 1), unit="kg")

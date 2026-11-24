@@ -198,19 +198,6 @@ GWT_GET_RECENT_BIOMETRICS = (
     "1|2|3|4|2|5|6|7|{user_id}|"
 )
 
-GWT_ADD_BIOMETRIC = (
-    "7|0|9|https://cronometer.com/cronometer/|"
-    "{gwt_header}|"
-    "com.cronometer.shared.rpc.CronometerService|"
-    "addBiometric|java.lang.String/2004016611|"
-    "com.cronometer.shared.biometrics.Biometric/2989635787|"
-    "I|{nonce}|"
-    "com.cronometer.shared.entries.models.Day/782579793|"
-    "1|2|3|4|3|5|6|7|8|6|"
-    "{value}|9|{day}|{month}|{year}|0|A|0|1|0|{flags}|"
-    "0|0|0|0|0|{metric_position}|0|{user_id}|"
-)
-
 GWT_REMOVE_MEASUREMENT = (
     "7|0|8|https://cronometer.com/cronometer/|"
     "{gwt_header}|"
@@ -220,14 +207,13 @@ GWT_REMOVE_MEASUREMENT = (
     "1|2|3|4|3|5|6|7|8|{biometric_id}|{user_id}|"
 )
 
-# Known biometric metric types and their addBiometric flags/position
-# flags encodes metric type + unit preferences
-# metric_position is the position in the Biometric object structure
+# add_biometric's metric types: (metric id, default unit). Values are stored
+# in the unit given by the entry's unit_id (see get_metrics for each metric's units).
 _BIOMETRIC_TYPES = {
-    "weight": {"flags": 65539, "metric_position": 2, "unit": "lbs"},
-    "blood_glucose": {"flags": 196609, "metric_position": 2, "unit": "mg/dL"},
-    "heart_rate": {"flags": 65540, "metric_position": 2, "unit": "bpm"},
-    "body_fat": {"flags": 65539, "metric_position": 2, "unit": "%"},
+    "weight": (1, "lbs"),
+    "heart_rate": (3, "bpm"),
+    "blood_glucose": (6, "mg/dL"),
+    "body_fat": (8, "%"),
 }
 
 # --- Fasting GWT templates ---
@@ -2326,60 +2312,57 @@ class CronometerClient:
         metric_type: str,
         value: float,
         day: date,
+        unit: str | None = None,
+        diary_group: int = 0,
     ) -> str:
-        """Add a biometric entry.
+        """Add a biometric entry at the end of a diary group.
 
         Args:
-            metric_type: One of 'weight', 'blood_glucose', 'heart_rate',
-                         'body_fat'.
-            value: The value in display units (lbs, mg/dL, bpm, %).
+            metric_type: One of 'weight', 'blood_glucose', 'heart_rate', 'body_fat'.
+            value: The value, in ``unit``.
             day: Date for the entry.
+            unit: A unit name the metric accepts (e.g. "lbs", "kg", "st" for
+                weight; "mg/dL" or "mmol/L" for blood glucose). Defaults to
+                lbs, mg/dL, bpm or %.
+            diary_group: Diary group slot (0 = the first group).
 
         Returns:
             The biometric entry ID (string).
         """
-        self.authenticate()
-
         if metric_type not in _BIOMETRIC_TYPES:
             raise ValueError(
                 f"Unknown metric_type '{metric_type}'. "
                 f"Supported: {list(_BIOMETRIC_TYPES.keys())}"
             )
-
-        info = _BIOMETRIC_TYPES[metric_type]
-
-        def _fmt(v: float) -> str:
-            return str(int(v)) if v == int(v) else str(v)
-
-        body = (
-            GWT_ADD_BIOMETRIC
-            .replace("{gwt_header}", self.gwt_header)
-            .replace("{nonce}", self.nonce or "")
-            .replace("{user_id}", self.user_id or "")
-            .replace("{value}", _fmt(value))
-            .replace("{day}", str(day.day))
-            .replace("{month}", str(day.month))
-            .replace("{year}", str(day.year))
-            .replace("{flags}", str(info["flags"]))
-            .replace("{metric_position}", str(info["metric_position"]))
-        )
+        metric_id, default_unit = _BIOMETRIC_TYPES[metric_type]
+        units = self.get_metrics()[metric_id]["units"]
+        want = (unit or default_unit).strip().lower()
+        unit_id = next((uid for uid, name, factor in units
+                        if name.lower() == want and factor), None)
+        if unit_id is None:
+            raise ValueError(f"{metric_type} takes units "
+                             f"{[name for _, name, factor in units if factor]}, not {unit!r}")
+        group = diary.group_layout(self.get_day_info(day)).get(diary_group, [])
+        biometric = {
+            "$class": gwt_foods.BIOMETRIC, "value": float(value), "day": diary.day_obj(day),
+            "external_id": None, "id": "A", "metadata": None, "metric_id": metric_id,
+            "tz_offset": None, "order": (diary_group << 16) | (len(group) + 1),
+            "sample_stats": None, "unknown_9": None, "unknown_10": None, "source": None,
+            "time": None, "unit_id": unit_id, "owner": int(self.user_id),
+        }
+        self.authenticate()
+        body = gwt_foods.encode_request(self.gwt_header, "addBiometric", [
+            (gwt_foods.STRING, self.nonce), (gwt_foods.BIOMETRIC, biometric),
+            ("I", int(self.user_id)),
+        ])
         raw = self._gwt_post(body)
-
-        if "//OK" not in raw:
+        # The reply is the new id, a bare GWT long: //OK["BXW0DA",[],0,7]
+        match = re.match(r'//OK\["([A-Za-z0-9$_]+)"', raw)
+        if not match:
             raise RuntimeError(f"addBiometric failed: {raw[:300]}")
-
-        # Extract biometric ID from response: //OK["BXW0DA",[],0,7]
-        biometric_id = ""
-        if raw.startswith("//OK["):
-            import re
-            match = re.search(r'"([A-Za-z0-9$_]+)"', raw)
-            if match:
-                biometric_id = match.group(1)
-
-        logger.info(
-            "Added biometric: type=%s, value=%.1f, date=%s, id=%s",
-            metric_type, value, day, biometric_id,
-        )
+        biometric_id = match.group(1)
+        logger.info("Added biometric: type=%s, value=%s, date=%s, id=%s",
+                    metric_type, value, day, biometric_id)
         return biometric_id
 
     def remove_biometric(self, biometric_id: str) -> bool:
