@@ -1455,7 +1455,7 @@ class CronometerClient:
             "order": (diary_group << 16) | position, "time": None,
             "owner": int(self.user_id), "amount": ing["amount"],
             "food_id": int(food["id"]), "id": "A",
-            "measure_id": ing["measure_id"], "unknown_11": 0,
+            "measure_id": ing["measure_id"], "translation_id": 0,
         }
         change = {"$class": gwt_foods.SINGLETON_LIST, "item": {
             "$class": gwt_foods.ADD_ENTRY_CHANGE,

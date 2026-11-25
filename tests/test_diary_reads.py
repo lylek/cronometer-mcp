@@ -53,6 +53,16 @@ class TestEntries:
         assert (e["quantity"], e["measure"], e["grams"]) == (0.167, "cup", 40.0)
         assert e["nutrients"] == {"Energy (kcal)": 155.6, "Protein (g)": 6.76}
 
+    def test_name_is_the_alias_picked_when_logging(self):
+        f = food(9, {208: 100.0}, name="Coffee, Prepared From Grounds")
+        f["translations"]["items"].append(
+            {**f["translations"]["items"][0], "id": 57480966, "name": "Coffee"})
+        s = serving("S3", 9, 1, 1, 100.0, 1)
+        assert diary.summarize_entry(s, {9: f}, {}, GROUPS, 42, None)["name"] == \
+            "Coffee, Prepared From Grounds"
+        s["translation_id"] = 57480966
+        assert diary.summarize_entry(s, {9: f}, {}, GROUPS, 42, None)["name"] == "Coffee"
+
     def test_recipe_by_recipe_relative_serving(self):
         e = diary.summarize_entry(serving("S2", 8, 3, 1, 1.0, 4), FOODS, {}, GROUPS, 42, None)
         assert (e["food_type"], e["custom"], e["name"]) == ("RECIPE", True, "My Stew")

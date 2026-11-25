@@ -280,7 +280,7 @@ LAYOUTS.update({
         ("food_id", "int"),
         ("id", "long"),
         ("measure_id", "int"),
-        ("unknown_11", "int"),
+        ("translation_id", "int"),  # the food name picked when logging; 0 = default
     ],
     EXERCISE: [
         ("exercise_type_id", "int"),

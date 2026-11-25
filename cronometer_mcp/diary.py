@@ -507,13 +507,28 @@ def pick_nutrients(values: dict[int, float], ids: set[int] | None) -> dict[str, 
     return out
 
 
+def logged_name(s: dict, food: dict | None) -> str | None:
+    """The name the entry was logged under, as the Diary page and export show it.
+
+    Database foods can have several English names; the serving records which
+    one was picked in search (translation_id), and 0 means the default name.
+    """
+    if not food:
+        return None
+    tid = s.get("translation_id")
+    for t in cf.items(food.get("translations")):
+        if tid and t.get("id") == tid:
+            return t["name"]
+    return cf.food_name(food)
+
+
 def summarize_serving(s: dict, food: dict | None, user_id: int) -> dict:
     """A logged food, recipe or meal, with the ids the other tools take."""
     grams, _, measure, qty = cf.ingredient_contribution(s, food)
     return {
         "serving_id": s["id"],
         "food_source_id": s["food_id"],
-        "name": cf.food_name(food) if food else None,
+        "name": logged_name(s, food),
         "food_type": cf.food_type(food) if food else None,
         "custom": food.get("owner") == user_id if food else None,
         "quantity": round(qty, 3) if qty is not None else None,

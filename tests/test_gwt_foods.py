@@ -32,7 +32,7 @@ def serving(order, amount=1.0, sid="FHEOTg"):
         "unknown_1": True, "unknown_2": True, "tz_offset": -480, "order": order,
         "time": {"$class": g.TIME, "hour": 7, "minute": 54, "second": 0},
         "owner": 6979138, "amount": amount, "food_id": 88465891, "id": sid,
-        "measure_id": 330016824, "unknown_11": 0,
+        "measure_id": 330016824, "translation_id": 0,
     }
 
 

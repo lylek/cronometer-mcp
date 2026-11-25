@@ -36,7 +36,7 @@ def serving(food_id, amount, measure_id, order=(1 << 16) | 1):
     return {
         "$class": g.SERVING, "day": diary.day_obj(DAY), "unknown_1": True, "unknown_2": True,
         "tz_offset": None, "order": order, "time": None, "owner": 1, "amount": amount,
-        "food_id": food_id, "id": "A", "measure_id": measure_id, "unknown_11": 0,
+        "food_id": food_id, "id": "A", "measure_id": measure_id, "translation_id": 0,
     }
 
 
