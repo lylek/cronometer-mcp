@@ -590,31 +590,64 @@ def search_foods(query: str) -> str:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
 
 
+MAX_BULK_FOODS = 100
+
+
+def _food_id_list(food_source_id: int | list[int]) -> list[int] | None:
+    """None for a single id; otherwise the ids, deduplicated, checked against the cap."""
+    if not isinstance(food_source_id, list):
+        return None
+    ids = list(dict.fromkeys(int(i) for i in food_source_id))
+    if not ids:
+        raise ValueError("food_source_id is an empty list")
+    if len(ids) > MAX_BULK_FOODS:
+        raise ValueError(f"At most {MAX_BULK_FOODS} foods per call (got {len(ids)})")
+    return ids
+
+
+def _food_details(food_source_id: int, food: dict) -> dict:
+    return {
+        "food_source_id": food_source_id,
+        "name": cf.food_name(food),
+        "default_measure_id": food["measures"]["default_measure_id"],
+        "measures": [
+            {"measure_id": m["measure_id"], "description": m["name"],
+             "weight_grams": m["grams"]}
+            for m in cf.describe_measures(food)
+        ],
+    }
+
+
 @_tool
-def get_food_details(food_source_id: int) -> str:
+def get_food_details(food_source_id: int | list[int]) -> str:
     """Get detailed food information including available serving measures.
 
     Use this after search_foods to pick a serving size for add_food_entry.
     Returns every serving size with its measure_id and gram weight (null
     for label units such as "tablet" that have no weight).
 
+    Pass a list of ids (up to 100) to look up several foods in one call; the
+    result then has "foods" (one entry per food found, in the order given)
+    and "not_found" (ids with no food).
+
     Args:
-        food_source_id: Food source ID from search_foods results.
+        food_source_id: Food source ID from search_foods or get_diary, or a
+                        list of them.
     """
     try:
         client = _get_client()
-        food = client._get_food_raw(food_source_id)
-        output = {
-            "status": "success",
-            "food_source_id": food_source_id,
-            "name": cf.food_name(food),
-            "default_measure_id": food["measures"]["default_measure_id"],
-            "measures": [
-                {"measure_id": m["measure_id"], "description": m["name"],
-                 "weight_grams": m["grams"]}
-                for m in cf.describe_measures(food)
-            ],
-        }
+        ids = _food_id_list(food_source_id)
+        if ids is None:
+            food = client._get_food_raw(food_source_id)
+            output = {"status": "success", **_food_details(food_source_id, food)}
+        else:
+            got = client.get_foods_raw(ids)
+            output = {
+                "status": "success",
+                "count": sum(i in got for i in ids),
+                "foods": [_food_details(i, got[i]) for i in ids if i in got],
+                "not_found": [i for i in ids if i not in got],
+            }
         return json.dumps(output, indent=2, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"status": "error", "message": f"{type(e).__name__}: {e}"})
@@ -1627,7 +1660,8 @@ def list_custom_foods(food_type: str | None = None, query: str | None = None) ->
 
 
 @_tool
-def get_custom_food(food_source_id: int, depth: int = 1, all_nutrients: bool = False) -> str:
+def get_custom_food(food_source_id: int | list[int], depth: int = 1,
+                    all_nutrients: bool = False) -> str:
     """Show a food, recipe or meal: nutrients, serving sizes and ingredients.
 
     Works for any food id, including database foods. Recipes report nutrients
@@ -1636,13 +1670,23 @@ def get_custom_food(food_source_id: int, depth: int = 1, all_nutrients: bool = F
     the Advanced Info: category, tags, barcodes and translations (names in
     other languages; the English one is "name").
 
+    Pass a list of ids (up to 100) to show several foods in one call; the
+    result then has "foods" (in the order given) and "not_found" instead of
+    "food".
+
     Args:
-        food_source_id: Food id (from list_custom_foods or search_foods).
+        food_source_id: Food id (from list_custom_foods, search_foods or
+                        get_diary), or a list of them.
         depth: Levels of nested recipes to expand inline (0 = just name them).
         all_nutrients: Include every nutrient (unnamed ones keyed by
                        Cronometer nutrient id), not just the common ones.
     """
     try:
+        ids = _food_id_list(food_source_id)
+        if ids is not None:
+            foods, missing = _get_client().get_custom_foods(ids, depth, all_nutrients)
+            return json.dumps({"status": "success", "count": len(foods), "foods": foods,
+                               "not_found": missing}, indent=2, ensure_ascii=False)
         food = _get_client().get_custom_food(food_source_id, depth, all_nutrients)
         return json.dumps({"status": "success", "food": food}, indent=2, ensure_ascii=False)
     except Exception as e:

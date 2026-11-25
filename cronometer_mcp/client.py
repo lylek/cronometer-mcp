@@ -2956,6 +2956,20 @@ class CronometerClient:
         children = self._load_children([food], depth)
         return cf.summarize_food(food, children, depth, all_nutrients)
 
+    def get_custom_foods(self, food_ids: list[int], depth: int = 1,
+                         all_nutrients: bool = False) -> tuple[list[dict], list[int]]:
+        """get_custom_food for several foods, fetched in bulk.
+
+        The foods, then each level of ingredients, take one getAllFood call
+        per 25 ids. Returns (summaries in the order asked, ids with no food).
+        """
+        ids = list(dict.fromkeys(int(i) for i in food_ids))
+        got = self.get_foods_raw(ids)
+        foods = [got[i] for i in ids if i in got]
+        children = self._load_children(foods, depth)
+        return ([cf.summarize_food(f, children, depth, all_nutrients) for f in foods],
+                [i for i in ids if i not in got])
+
     def _build_ingredients(self, specs: list[dict], existing: list[dict]) -> list[dict]:
         by_row = {ing["id"]: ing for ing in existing}
         foods = self.get_foods_raw([s["food_source_id"] for s in specs])
